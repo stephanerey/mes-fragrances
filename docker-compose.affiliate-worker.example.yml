@@ -1,0 +1,13 @@
+services:
+  affiliate-worker:
+    build:
+      context: ./affiliate-worker
+    env_file:
+      - ./affiliate-worker/.env
+    volumes:
+      - ./affiliate-worker/data:/data
+    # No ports: this worker must not be exposed publicly.
+    restart: "no"
+    command: ["--help"]
+
+# Adapt networks and depends_on after inspecting the CIS Docker Compose stack on the VPS.
