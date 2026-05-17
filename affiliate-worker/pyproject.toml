@@ -7,7 +7,9 @@ name = "mes-fragrances-affiliate-worker"
 version = "0.1.0"
 description = "Affiliate feed worker for mes-fragrances.com"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "psycopg[binary]>=3.1",
+]
 
 [project.optional-dependencies]
 dev = [
