@@ -10,7 +10,10 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-dev = []
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
 
 [tool.setuptools]
 packages = ["app"]
