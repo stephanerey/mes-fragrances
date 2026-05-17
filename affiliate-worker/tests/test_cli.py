@@ -28,6 +28,24 @@ def test_show_config_does_not_print_secrets(monkeypatch, tmp_path, capsys):
     assert '"awin_product_feed_api_key_configured": true' in captured.out
 
 
+def test_inspect_db_without_database_url_returns_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("AFFILIATE_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    exit_code = main(["inspect-db"])
+
+    assert exit_code == 1
+
+
+def test_migrate_db_without_database_url_returns_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("AFFILIATE_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    exit_code = main(["migrate-db"])
+
+    assert exit_code == 1
+
+
 def test_import_local_csv_missing_file_returns_error(monkeypatch, tmp_path):
     monkeypatch.setenv("AFFILIATE_DATA_DIR", str(tmp_path))
 
