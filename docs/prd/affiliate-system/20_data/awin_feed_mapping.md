@@ -81,7 +81,7 @@ Select all available product data columns where possible.
 Reason:
 
 - raw staging preserves the full payload;
-- later matching can benefit from `brand_name`, `ean`, `product_GTIN`, `mpn`, stock fields, delivery fields and category path fields;
+- later matching needs `brand_name`, `ean`, `upc`, `mpn`, `product_GTIN`, stock fields, delivery fields and category path fields;
 - unused fields can be ignored after staging;
 - having too few fields is more damaging than having extra fields.
 
@@ -113,9 +113,9 @@ format/csv/delimiter/%2C/compression/gzip
 
 The worker must support gzip-compressed CSV downloads.
 
-## Required columns
+## Required columns for raw staging and basic offers
 
-Required for reliable raw staging and offer creation:
+Required for reliable raw staging and basic offer creation:
 
 ```text
 aw_product_id
@@ -154,6 +154,57 @@ search_price or display_price or store_price
 ```
 
 If both `aw_product_id` and `merchant_product_id` are missing, the worker may still stage the row using `raw_hash`, but it must report the row as missing stable external ids and must not auto-match it.
+
+## Required columns for robust perfume matching
+
+These fields are available in the Awin selectable columns shown by the operator and must be selected for production when available:
+
+```text
+brand_name
+brand_id
+ean
+upc
+mpn
+product_GTIN
+parent_product_id
+merchant_product_category_path
+merchant_product_second_category
+merchant_product_third_category
+product_type
+keywords
+specifications
+in_stock
+stock_quantity
+stock_status
+is_for_sale
+web_offer
+pre_order
+valid_from
+valid_to
+delivery_cost
+delivery_time
+large_image
+merchant_thumb_url
+alternate_image
+alternate_image_two
+alternate_image_three
+alternate_image_four
+commission_group
+```
+
+If any of these are absent from a downloaded feed, the worker must not fail raw staging, but it must include them in `missing_recommended_columns` and lower matching confidence when relevant.
+
+Identifier fields have special importance:
+
+```text
+ean
+upc
+mpn
+product_GTIN
+parent_product_id
+```
+
+If present, they must be used before fuzzy matching.
 
 ## Recommended selected columns
 
@@ -312,7 +363,27 @@ The screenshots show a currently selected column set similar to:
 aw_deep_link,product_name,aw_product_id,merchant_product_id,merchant_image_url,description,merchant_category,search_price,merchant_name,merchant_id,category_name,category_id,aw_image_url,currency,store_price,delivery_cost,merchant_deep_link,language,last_updated,display_price,data_feed_id
 ```
 
-This is enough for raw staging and basic offer creation, but not ideal for robust matching because it misses product detail fields such as `brand_name`, `ean`, `product_GTIN`, `mpn`, `in_stock`, `stock_status`, `large_image`, and `merchant_product_category_path`.
+This is enough for raw staging and basic offer creation, but it is not acceptable as the final production column set because it misses robust matching fields such as:
+
+```text
+brand_name
+ean
+upc
+mpn
+product_GTIN
+parent_product_id
+in_stock
+stock_quantity
+stock_status
+merchant_product_category_path
+large_image
+merchant_thumb_url
+alternate_image*
+commission_group
+keywords
+product_type
+specifications
+```
 
 ## Preferred production column URL
 
@@ -440,6 +511,7 @@ Every import report must include:
 
 - parsed CSV header;
 - required columns present/missing;
+- robust matching columns present/missing;
 - recommended columns present/missing;
 - source file checksum;
 - remote Last Imported when available;
