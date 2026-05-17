@@ -2,7 +2,7 @@
 
 Python batch worker for Mes Fragrances affiliate feed processing.
 
-This is PR1 skeleton only. It intentionally does not implement database migrations, CSV parsing, offer upsert, or Awin live API calls yet.
+This worker is intentionally separate from the CIS container.
 
 ## Commands
 
@@ -11,7 +11,31 @@ From this directory:
 ```bash
 python -m app.main --help
 python -m app.main show-config
+python -m app.main inspect-db
+python -m app.main migrate-db
 python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
+```
+
+## Database migration workflow
+
+Before production migrations, inspect the schema:
+
+```bash
+python -m app.main inspect-db
+```
+
+Apply safe isolated affiliate migrations:
+
+```bash
+python -m app.main migrate-db
+```
+
+Template migrations, such as `product_variants`, are skipped by default because they depend on the actual CIS product table name.
+
+Only apply templates after schema confirmation:
+
+```bash
+python -m app.main migrate-db --include-templates
 ```
 
 ## Docker build
