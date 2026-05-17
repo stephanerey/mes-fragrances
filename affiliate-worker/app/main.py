@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import Settings, load_settings
+from app.db.connection import open_connection
+from app.db.migrations import apply_migrations, inspect_public_schema
 from app.logging_config import configure_logging
 
 LOGGER = logging.getLogger(__name__)
@@ -32,6 +34,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     config_parser.set_defaults(handler=handle_show_config)
 
+    inspect_db_parser = subparsers.add_parser(
+        "inspect-db",
+        help="Inspect public database schema and candidate product tables.",
+    )
+    inspect_db_parser.set_defaults(handler=handle_inspect_db)
+
+    migrate_parser = subparsers.add_parser(
+        "migrate-db",
+        help="Apply affiliate database migrations.",
+    )
+    migrate_parser.add_argument(
+        "--include-templates",
+        action="store_true",
+        help="Also apply template migrations that require schema confirmation.",
+    )
+    migrate_parser.set_defaults(handler=handle_migrate_db)
+
     import_local_parser = subparsers.add_parser(
         "import-local-csv",
         help="Validate a local CSV import command skeleton.",
@@ -42,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     import_local_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate inputs without mutating database state. DB writes are not implemented in PR1.",
+        help="Validate inputs without mutating database state. DB writes begin in later PRs.",
     )
     import_local_parser.set_defaults(handler=handle_import_local_csv)
 
@@ -55,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
     import_feeds_parser.set_defaults(handler=handle_import_feeds)
 
     return parser
+
+
+def require_database_url(settings: Settings) -> str:
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required for this command")
+    return settings.database_url
 
 
 def handle_show_config(args: argparse.Namespace, settings: Settings) -> int:
@@ -78,6 +103,38 @@ def handle_show_config(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def handle_inspect_db(args: argparse.Namespace, settings: Settings) -> int:
+    settings.ensure_data_dirs()
+    database_url = require_database_url(settings)
+    with open_connection(database_url) as connection:
+        payload = inspect_public_schema(connection)
+
+    report_path = settings.reports_dir / "db_schema_inspection.json"
+    report_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    LOGGER.info("Database inspection report written to %s", report_path)
+    return 0
+
+
+def handle_migrate_db(args: argparse.Namespace, settings: Settings) -> int:
+    settings.ensure_data_dirs()
+    database_url = require_database_url(settings)
+    with open_connection(database_url) as connection:
+        results = apply_migrations(connection, include_templates=args.include_templates)
+
+    payload = {
+        "status": "success",
+        "include_templates": bool(args.include_templates),
+        "results": [result.__dict__ for result in results],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    report_path = settings.reports_dir / "db_migration_report.json"
+    report_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    LOGGER.info("Database migration report written to %s", report_path)
+    return 0
+
+
 def handle_import_local_csv(args: argparse.Namespace, settings: Settings) -> int:
     settings.ensure_data_dirs()
     csv_path = Path(args.path)
@@ -92,7 +149,7 @@ def handle_import_local_csv(args: argparse.Namespace, settings: Settings) -> int
 
     report = {
         "status": "validated",
-        "message": "PR1 skeleton only: CSV parsing and database writes are implemented in later PRs.",
+        "message": "CSV parsing and database writes are implemented in later PRs.",
         "advertiser_id": args.advertiser,
         "feed_id": args.feed_id,
         "path": str(csv_path),
@@ -116,7 +173,7 @@ def handle_import_local_csv(args: argparse.Namespace, settings: Settings) -> int
 
 def handle_import_feeds(args: argparse.Namespace, settings: Settings) -> int:
     settings.ensure_data_dirs()
-    LOGGER.warning("Live feed import is not implemented in PR1. network=%s dry_run=%s", args.network, args.dry_run)
+    LOGGER.warning("Live feed import is not implemented yet. network=%s dry_run=%s", args.network, args.dry_run)
     return 3
 
 
@@ -131,7 +188,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    return args.handler(args, settings)
+    try:
+        return args.handler(args, settings)
+    except Exception as exc:
+        LOGGER.error("Command failed: %s", exc)
+        return 1
 
 
 if __name__ == "__main__":
