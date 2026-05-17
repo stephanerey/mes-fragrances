@@ -2,7 +2,8 @@
 
 ## Repository expectations
 
-- Read `docs/prd/affiliate-system/START_HERE.md` before editing project-critical code.
+- Read `docs/prd/affiliate-system/CODEX_START.md` before editing project-critical code.
+- Then read `docs/prd/affiliate-system/START_HERE.md` and the relevant task under `docs/prd/affiliate-system/codex_tasks/`.
 - For affiliate work, read the domain docs and the relevant feature spec before implementation.
 - Keep changes scoped to the requested PR slice.
 - Prefer updating existing files and patterns rather than introducing parallel structures.
@@ -10,19 +11,33 @@
 
 ## Current repository state
 
-This repository starts as the documentation and implementation home for `mes-fragrances.com` affiliate infrastructure.
+This repository is the canonical implementation repository for `mes-fragrances.com` affiliate infrastructure.
 
-The first major feature is the affiliate feed pipeline for Awin and Perfumerias Comas FR.
+Current state:
+
+- documentation and PRD only;
+- no worker code yet;
+- no database migrations yet;
+- no import pipeline yet.
+
+Codex must implement source code here, starting from the task files in `docs/prd/affiliate-system/codex_tasks/`.
 
 ## How to work in this repository
 
-Build command: to be defined when implementation files are added.
+Build command: defined per task until implementation files exist.
 
-Test command: to be defined when implementation files are added.
+Test command: defined per task until implementation files exist.
 
-Lint/static analysis command: to be defined when implementation files are added.
+Lint/static analysis command: defined per task until implementation files exist.
 
-Deployment check: to be defined after inspecting the CIS Docker stack on the VPS.
+Deployment check: to be defined after inspecting the CIS Docker stack on the VPS and filling `docs/prd/affiliate-system/00_environment/vps_inventory.md`.
+
+## Branch and PR policy
+
+- Create one branch per PRD task.
+- Open one Pull Request per task.
+- Do not merge your own PR.
+- Do not implement multiple roadmap PRs in one branch unless explicitly requested.
 
 ## Constraints and do-not rules
 
@@ -45,4 +60,4 @@ Deployment check: to be defined after inspecting the CIS Docker stack on the VPS
 
 ## Planning rule
 
-For complex features, migrations, Docker/runtime changes, or work spanning several modules, use `docs/prd/affiliate-system/PLANS.md` before implementation.
+For complex features, migrations, Docker/runtime changes, or work spanning several modules, use `docs/prd/affiliate-system/PLANS.md` and the relevant task file before implementation.
