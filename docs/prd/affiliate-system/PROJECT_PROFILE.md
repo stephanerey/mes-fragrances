@@ -25,14 +25,16 @@ The affiliate feed system must be implemented as a separate Docker worker. CIS m
 
 1. Affiliate worker
 2. Awin integration
-3. Feed staging
-4. Normalization
-5. Product and variant matching
-6. Offers upsert
-7. Product candidate workflow
-8. Cron / scheduler integration
-9. Logs and import reports
-10. Future click and transaction tracking
+3. Feed discovery/download
+4. Feed preprocessing and quality report
+5. Feed staging
+6. Normalization
+7. Product and variant matching
+8. Offers upsert
+9. Product candidate workflow
+10. Cron / scheduler integration
+11. Logs and import reports
+12. Future click and transaction tracking
 
 ## First advertiser
 
@@ -40,7 +42,7 @@ The affiliate feed system must be implemented as a separate Docker worker. CIS m
 - network: Awin
 - merchant id: `105475`
 - feed id: `97867`
-- initial feed format: CSV
+- initial feed format: CSV/gzip in production, local CSV fixture for tests
 
 ## Core design decision
 
@@ -70,13 +72,31 @@ All important domain and architecture decisions must be reflected in this PRD. C
 
 ## Initial PR strategy
 
+The first implementation steps must validate the real Awin feed before database and matching work.
+
 1. Add worker Docker skeleton and configuration.
-2. Add database migrations for affiliate tables.
-3. Add raw feed import for Comas CSV.
-4. Add normalization and fragrance filtering.
-5. Add matching and offer upsert.
-6. Add product candidates.
-7. Add cron/systemd integration and logs.
-8. Add front-end offer display in CIS.
-9. Add click tracking.
-10. Add Awin transaction/performance import.
+2. Validate Awin feed discovery/download.
+3. Produce Awin feed preprocessing and quality report.
+4. Add database migrations for affiliate tables.
+5. Add raw staging import for Comas CSV/Awin feed.
+6. Add normalization and fragrance filtering in the pipeline.
+7. Add matching and offer upsert.
+8. Add product candidates.
+9. Add cron/systemd integration and operational reports.
+10. Add front-end offer display in CIS.
+11. Add click tracking.
+12. Add Awin transaction/performance import.
+
+## Gate before matching
+
+Do not proceed to matching/offer automation until PR03 measures the real Awin feed quality:
+
+- column coverage;
+- fragrance row count;
+- brand coverage;
+- identifier coverage: EAN/UPC/MPN/GTIN;
+- volume parsing coverage;
+- concentration parsing coverage;
+- price and URL coverage;
+- stock and delivery coverage;
+- exclusion rates for coffrets/testers/body products.

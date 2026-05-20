@@ -1,26 +1,31 @@
-# Codex Task PR03 — Local CSV Staging Import
+# Codex Task PR05 — Raw Staging Import
 
 ## Goal
 
-Import a local Awin/Comas CSV feed into raw staging tables.
+Import local or downloaded Awin/Comas CSV feed rows into raw staging tables.
+
+This PR persists raw rows and import runs only. It must not create offers, candidates, or public catalog products.
 
 ## Branch
 
 ```text
-feat/local-csv-staging-import
+feat/raw-staging-import
 ```
 
 ## Prerequisites
 
-- PR01 worker skeleton merged.
-- PR02 database migrations merged.
+- PR01 worker Docker skeleton merged.
+- PR02 Awin feed discovery/download merged.
+- PR03 Awin preprocessing report merged.
+- PR04 database migrations merged.
 - `migrate-db` has been run on the target environment.
 
 ## Scope
 
 Implement:
 
-- local CSV reader;
+- local CSV raw staging import;
+- downloaded Awin feed raw staging import if PR02 saved feed files;
 - source file SHA256 calculation;
 - import run creation;
 - raw feed row persistence;
@@ -30,7 +35,9 @@ Implement:
 - dry-run mode;
 - tests using small fixtures.
 
-## Required command
+## Required commands
+
+Local file:
 
 ```bash
 python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv
@@ -40,6 +47,12 @@ Dry-run:
 
 ```bash
 python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
+```
+
+Downloaded feed if implemented:
+
+```bash
+python -m app.main import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867
 ```
 
 ## Raw staging behavior
@@ -132,7 +145,7 @@ Do not implement:
 - matching;
 - offer upsert;
 - product candidate creation;
-- Awin live download.
+- Awin transaction import.
 
 ## Validation commands
 
@@ -166,4 +179,4 @@ python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path d
 - report example;
 - test results;
 - known limitations;
-- next recommended task: PR04 normalization and fragrance filtering.
+- next recommended task: PR06 normalization and fragrance filtering.

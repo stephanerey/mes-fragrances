@@ -138,4 +138,4 @@ docker run --rm mes-fragrances-affiliate-worker --help
 - summary of files added;
 - validation commands run;
 - explicit note that DB/Awin/import logic is not implemented yet;
-- next recommended task: PR02 database migrations.
+- next recommended task: PR02 Awin feed discovery and download smoke test.

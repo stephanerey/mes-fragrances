@@ -1,8 +1,10 @@
-# Codex Task PR04 — Normalization and Fragrance Filtering
+# Codex Task PR06 — Normalization and Fragrance Filtering in Pipeline
 
 ## Goal
 
 Convert raw staged Awin feed rows into normalized internal feed items and identify which rows are actionable fragrance rows.
+
+This PR connects the preprocessing logic validated in PR03 to the raw staging/import pipeline from PR05.
 
 ## Branch
 
@@ -12,9 +14,9 @@ feat/normalization-fragrance-filtering
 
 ## Prerequisites
 
-- PR01 worker skeleton merged.
-- PR02 database migrations merged.
-- PR03 local CSV staging import merged.
+- PR03 Awin preprocessing report merged.
+- PR04 database migrations merged.
+- PR05 raw staging import merged.
 
 ## Scope
 
@@ -31,10 +33,9 @@ Implement:
 - concentration parsing;
 - volume parsing;
 - exclusion keyword detection;
-- category counts in import reports;
-- missing desired/required column reporting;
 - normalized feed item representation;
-- fragrance actionable filter.
+- fragrance actionable filter;
+- report counters integrated into import reports.
 
 ## Out of scope
 
@@ -44,7 +45,6 @@ Do not implement:
 - offer upsert;
 - product candidate creation;
 - public catalog product creation;
-- Awin live download if not already implemented in a prior task;
 - front-end display.
 
 ## Input
@@ -54,9 +54,7 @@ Use raw staged rows from `raw_feed_items.raw_payload`.
 The raw payload may come from:
 
 - local CSV import;
-- later Awin automatic feed download.
-
-The provided manual CSV may be incomplete. Do not treat its missing columns as unavailable in Awin.
+- automatic Awin feed download.
 
 ## Output
 
@@ -99,7 +97,7 @@ is_fragrance
 is_excluded
 exclusion_reasons
 missing_required_columns
-missing_desired_columns
+missing_recommended_columns
 ```
 
 ## Fragrance filter V1
@@ -138,29 +136,7 @@ bougie
 candle
 ```
 
-In PR04, only detect/report exclusions. Do not make matching decisions yet.
-
-## Parsing examples
-
-Expected concentration parsing:
-
-```text
-Eau de Parfum -> EDP
-EDP -> EDP
-Eau de Toilette -> EDT
-EDT -> EDT
-Extrait de Parfum -> Extrait
-Parfum -> Parfum
-```
-
-Expected volume parsing:
-
-```text
-30 ml -> 30
-50ml -> 50
-100 ML -> 100
-2 x 50 ml -> detect as multi-item, avoid simple auto-match later
-```
+In PR06, only detect/report exclusions. Do not make matching decisions yet.
 
 ## Required tests
 
@@ -169,37 +145,12 @@ Add tests for:
 - `normalize_text`;
 - accent removal;
 - HTML entity decoding;
-- price parsing from `search_price` and `display_price`;
+- price parsing from `search_price`, `display_price`, `store_price`;
 - concentration parsing;
 - volume parsing;
 - category filter;
 - exclusion keyword detection;
 - missing column report.
-
-Use `docs/prd/affiliate-system/fixtures/comas_sample.csv` or a copied fixture under `affiliate-worker/tests/fixtures/`.
-
-## CLI/report behavior
-
-The import report should include, once normalization is invoked:
-
-```json
-{
-  "rows_total": 5,
-  "rows_fragrance": 4,
-  "rows_non_fragrance": 1,
-  "rows_excluded_by_keyword": 1,
-  "missing_required_columns": [],
-  "missing_desired_columns": ["..."]
-}
-```
-
-## Validation commands
-
-```bash
-pytest
-ruff check .
-python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path docs/prd/affiliate-system/fixtures/comas_sample.csv --dry-run
-```
 
 ## Acceptance criteria
 
@@ -218,4 +169,4 @@ python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path d
 - parsing examples covered by tests;
 - report sample;
 - known limitations;
-- next recommended task: PR05 matching and offer upsert.
+- next recommended task: PR07 matching and offer upsert.

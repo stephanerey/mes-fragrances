@@ -1,4 +1,4 @@
-# Codex Task PR05 — Matching and Offer Upsert
+# Codex Task PR07 — Matching and Offer Upsert
 
 ## Goal
 
@@ -12,10 +12,10 @@ feat/matching-offer-upsert
 
 ## Prerequisites
 
-- PR01 worker skeleton merged.
-- PR02 database migrations merged.
-- PR03 local CSV staging import merged.
-- PR04 normalization/fragrance filtering merged.
+- PR03 Awin preprocessing report merged and reviewed.
+- PR04 database migrations merged.
+- PR05 raw staging import merged.
+- PR06 normalization/fragrance filtering merged.
 - Existing CIS product schema inspected and documented in `00_environment/vps_inventory.md`.
 
 ## Scope
@@ -39,7 +39,7 @@ Implement:
 
 Do not implement:
 
-- product candidate creation for unmatched rows; defer to PR06;
+- product candidate creation for unmatched rows; defer to PR08;
 - admin review UI;
 - public product creation;
 - front-end offer display;
@@ -114,9 +114,9 @@ unmatched
 excluded
 ```
 
-PR05 should create offers only for confident matched statuses.
+PR07 should create offers only for confident matched statuses.
 
-`needs_review`, `unmatched`, and `excluded` are handled as candidates in PR06.
+`needs_review`, `unmatched`, and `excluded` are handled as candidates in PR08.
 
 ## Tests
 
@@ -133,25 +133,10 @@ Add tests for:
 - stale offer deactivation;
 - duplicate import idempotence.
 
-## Validation commands
-
-```bash
-pytest
-ruff check .
-python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path docs/prd/affiliate-system/fixtures/comas_sample.csv --dry-run
-```
-
-With a test/dev DB:
-
-```bash
-python -m app.main migrate-db
-python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path docs/prd/affiliate-system/fixtures/comas_sample.csv
-```
-
 ## Acceptance criteria
 
 - matched rows create or update offers;
-- unmatched rows do not create offers in PR05;
+- unmatched rows do not create offers in PR07;
 - excluded rows do not create offers;
 - offer import is idempotent;
 - price changes are tracked;
@@ -166,4 +151,4 @@ python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path d
 - stale offer logic;
 - test results;
 - known limitations;
-- next recommended task: PR06 product candidates.
+- next recommended task: PR08 product candidates.

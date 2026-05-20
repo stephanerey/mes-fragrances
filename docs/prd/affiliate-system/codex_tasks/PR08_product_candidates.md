@@ -1,4 +1,4 @@
-# Codex Task PR06 — Product Candidates
+# Codex Task PR08 — Product Candidates
 
 ## Goal
 
@@ -12,11 +12,11 @@ feat/product-candidates
 
 ## Prerequisites
 
-- PR01 worker skeleton merged.
-- PR02 database migrations merged.
-- PR03 local CSV staging import merged.
-- PR04 normalization/fragrance filtering merged.
-- PR05 matching/offer upsert merged.
+- PR03 Awin preprocessing report merged and reviewed.
+- PR04 database migrations merged.
+- PR05 raw staging import merged.
+- PR06 normalization/fragrance filtering merged.
+- PR07 matching/offer upsert merged.
 
 ## Scope
 
@@ -152,4 +152,4 @@ Add tests for:
 - test results;
 - report example;
 - known limitations;
-- next recommended task: PR07 cron/systemd and operational reports.
+- next recommended task: PR09 cron/systemd and operational reports.

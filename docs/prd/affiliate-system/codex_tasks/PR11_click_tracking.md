@@ -1,4 +1,4 @@
-# Codex Task PR09 — Click Tracking
+# Codex Task PR11 — Click Tracking
 
 ## Goal
 
@@ -13,9 +13,9 @@ feat/affiliate-click-tracking
 ## Prerequisites
 
 - PR01 worker skeleton merged.
-- PR02 database migrations merged.
-- PR05 matching/offer upsert merged.
-- PR08 CIS offer display merged.
+- PR04 database migrations merged.
+- PR07 matching/offer upsert merged.
+- PR10 CIS offer display merged.
 - Website routing mechanism inspected and documented in `00_environment/vps_inventory.md`.
 
 ## Scope
@@ -163,4 +163,4 @@ Add tests for:
 - privacy decision for IP/user-agent;
 - validation/test results;
 - known limitations;
-- next recommended task: PR10 Awin transactions and performance.
+- next recommended task: PR12 Awin transactions and performance.

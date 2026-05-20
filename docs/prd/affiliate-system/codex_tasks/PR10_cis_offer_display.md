@@ -1,4 +1,4 @@
-# Codex Task PR08 — CIS Offer Display
+# Codex Task PR10 — CIS Offer Display
 
 ## Goal
 
@@ -13,12 +13,14 @@ feat/cis-offer-display
 ## Prerequisites
 
 - PR01 worker skeleton merged.
-- PR02 database migrations merged.
-- PR03 local CSV staging import merged.
-- PR04 normalization/fragrance filtering merged.
-- PR05 matching/offer upsert merged.
-- PR06 product candidates merged.
-- PR07 operational reports merged or at least worker tables populated in dev.
+- PR02 Awin feed discovery/download merged.
+- PR03 Awin preprocessing report merged.
+- PR04 database migrations merged.
+- PR05 raw staging import merged.
+- PR06 normalization/fragrance filtering merged.
+- PR07 matching/offer upsert merged.
+- PR08 product candidates merged.
+- PR09 operational reports merged or at least worker tables populated in dev.
 - CIS front-end structure inspected and documented in `00_environment/vps_inventory.md`.
 
 ## Scope
@@ -37,7 +39,7 @@ Implement:
 
 Do not implement:
 
-- click tracking redirect route; direct affiliate links are acceptable until PR09;
+- click tracking redirect route; direct affiliate links are acceptable until PR11;
 - transaction import;
 - admin candidate review UI;
 - automatic product publication.
@@ -87,7 +89,7 @@ Minimum visible fields:
 
 ## Link behavior
 
-Until PR09 click tracking exists, render direct affiliate URLs with:
+Until PR11 click tracking exists, render direct affiliate URLs with:
 
 ```html
 rel="sponsored nofollow"
@@ -146,4 +148,4 @@ Manual checks:
 - screenshots if practical;
 - manual validation results;
 - known limitations;
-- next recommended task: PR09 click tracking.
+- next recommended task: PR11 click tracking.

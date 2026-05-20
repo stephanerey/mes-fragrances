@@ -1,8 +1,8 @@
-# Codex Task PR02 — Database Migrations
+# Codex Task PR04 — Database Migrations
 
 ## Goal
 
-Add database migration infrastructure and the first affiliate tables.
+Add database migration infrastructure and the first affiliate tables after the real Awin feed has been validated.
 
 ## Branch
 
@@ -10,9 +10,13 @@ Add database migration infrastructure and the first affiliate tables.
 feat/affiliate-db-migrations
 ```
 
-## Prerequisite
+## Prerequisites
 
-PR01 must be merged.
+- PR01 worker Docker skeleton merged.
+- PR02 Awin feed discovery/download merged.
+- PR03 Awin preprocessing report merged.
+- Feed quality report reviewed.
+- Existing CIS schema inspected where possible.
 
 Before implementing migrations that touch existing CIS product/catalog tables, inspect the live/dev database schema and update:
 
@@ -48,7 +52,7 @@ python -m app.main migrate-db
 
 `migrate-db` must apply only safe migrations by default.
 
-## Tables to create in PR02
+## Tables to create in PR04
 
 Create isolated tables first:
 
@@ -86,11 +90,13 @@ currency: EUR
 active: true
 ```
 
+Also store metadata from PR02/PR03 where useful, without storing secrets or full signed URLs.
+
 ## Out of scope
 
 Do not implement:
 
-- CSV import;
+- CSV raw staging import;
 - normalization;
 - matching;
 - offer upsert logic;
@@ -134,4 +140,5 @@ ruff check .
 - tables created;
 - backup/rollback notes;
 - validation commands run;
-- any divergence from `database_schema.md`.
+- any divergence from `database_schema.md`;
+- explicit reference to PR03 feed quality results.

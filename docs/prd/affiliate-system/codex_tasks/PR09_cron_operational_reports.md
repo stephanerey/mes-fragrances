@@ -1,4 +1,4 @@
-# Codex Task PR07 — Cron/Systemd and Operational Reports
+# Codex Task PR09 — Cron/Systemd and Operational Reports
 
 ## Goal
 
@@ -13,11 +13,13 @@ feat/cron-operational-reports
 ## Prerequisites
 
 - PR01 worker skeleton merged.
-- PR02 database migrations merged.
-- PR03 local CSV staging import merged.
-- PR04 normalization/fragrance filtering merged.
-- PR05 matching/offer upsert merged.
-- PR06 product candidates merged.
+- PR02 Awin feed discovery/download merged.
+- PR03 Awin preprocessing report merged.
+- PR04 database migrations merged.
+- PR05 raw staging import merged.
+- PR06 normalization/fragrance filtering merged.
+- PR07 matching/offer upsert merged.
+- PR08 product candidates merged.
 - `00_environment/vps_inventory.md` filled for deployment-relevant fields.
 
 ## Scope
@@ -116,7 +118,7 @@ Include:
   "candidates_updated": 0,
   "rows_errors": 0,
   "missing_required_columns": [],
-  "missing_desired_columns": []
+  "missing_recommended_columns": []
 }
 ```
 
@@ -171,4 +173,4 @@ docker compose run --rm affiliate-worker python -m app.main import-feeds --netwo
 - report sample;
 - locking strategy;
 - validation results;
-- next recommended task: PR08 CIS offer display.
+- next recommended task: PR10 CIS offer display.

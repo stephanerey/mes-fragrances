@@ -1,4 +1,4 @@
-# Codex Task PR10 — Awin Transactions and Performance
+# Codex Task PR12 — Awin Transactions and Performance
 
 ## Goal
 
@@ -13,9 +13,9 @@ feat/awin-transactions-performance
 ## Prerequisites
 
 - PR01 worker skeleton merged.
-- PR02 database migrations merged.
-- PR08 CIS offer display merged.
-- PR09 click tracking merged.
+- PR04 database migrations merged.
+- PR10 CIS offer display merged.
+- PR11 click tracking merged.
 - Awin credentials configured on VPS.
 
 ## Scope
@@ -78,7 +78,7 @@ updated_at
 
 ## Reconciliation
 
-Use `click_ref` from PR09 where available.
+Use `click_ref` from PR11 where available.
 
 If no click reference is available:
 
