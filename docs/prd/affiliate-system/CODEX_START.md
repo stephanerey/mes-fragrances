@@ -36,10 +36,11 @@ Before implementing any code, read:
 9. `docs/prd/affiliate-system/10_architecture/docker_runtime.md`
 10. `docs/prd/affiliate-system/10_architecture/implementation_conventions.md`
 11. `docs/prd/affiliate-system/10_architecture/secrets_strategy.md`
-12. `docs/prd/affiliate-system/20_data/database_schema.md`
-13. `docs/prd/affiliate-system/20_data/awin_feed_mapping.md`
+12. `docs/prd/affiliate-system/20_data/awin_feed_mapping.md`
+13. `docs/prd/affiliate-system/20_data/database_schema.md`
 14. `docs/prd/affiliate-system/20_data/migration_plan.md`
-15. the relevant file under `docs/prd/affiliate-system/codex_tasks/`
+15. `docs/prd/affiliate-system/PLANS.md`
+16. the relevant file under `docs/prd/affiliate-system/codex_tasks/`
 
 ## Execution workflow
 
@@ -51,7 +52,14 @@ Default first task:
 PR01_worker_docker_skeleton.md
 ```
 
-Do not implement later PR slices unless explicitly requested.
+Then continue with the Awin-first validation sequence:
+
+```text
+PR02_awin_feed_discovery_download.md
+PR03_awin_preprocessing_report.md
+```
+
+Do not implement database migrations, matching, offers or CIS integration before the Awin feed discovery/download and preprocessing reports are reviewed.
 
 ## Branch and PR policy
 
@@ -74,6 +82,7 @@ For each task:
 - Do not overwrite existing editorial product fields without validation.
 - Do not guess the CIS database schema. Inspect it first.
 - Do not collapse multiple roadmap PRs into one large PR.
+- Do not proceed to matching until real Awin feed quality has been measured.
 
 ## Server inspection rule
 
