@@ -1,0 +1,38 @@
+name: Affiliate Worker CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/affiliate-worker-skeleton
+  pull_request:
+
+jobs:
+  affiliate-worker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install worker dependencies
+        working-directory: affiliate-worker
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        working-directory: affiliate-worker
+        run: pytest
+
+      - name: Run lint
+        working-directory: affiliate-worker
+        run: ruff check .
+
+      - name: Build Docker image
+        run: docker build -t mes-fragrances-affiliate-worker ./affiliate-worker

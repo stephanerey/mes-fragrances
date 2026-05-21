@@ -19,9 +19,16 @@ Not implemented in PR01:
 
 ## Local setup
 
+On Ubuntu hosts outside a virtual environment, prefer `python3 -m ...`.
+After activating `.venv`, use `python -m ...`.
+For production-style validation, prefer the Docker commands below.
+
 ```bash
 cd affiliate-worker
-pip install -e .[dev]
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
 ## Local commands
@@ -34,6 +41,8 @@ python -m app.main import-feeds --network awin --dry-run
 pytest
 ruff check .
 ```
+
+If you are not inside `.venv`, use `python3 -m app.main ...` on Ubuntu instead of `python -m app.main ...`.
 
 `show-config` only reports whether secrets are configured. It never prints their values.
 
