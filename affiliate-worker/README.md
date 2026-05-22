@@ -21,11 +21,20 @@ Implemented in PR02 and PR03:
 - safe JSON reports under `/data/reports`;
 - URL redaction for any signed or API-keyed feed URLs.
 
+Implemented in PR04:
+
+- PostgreSQL connection helper via `DATABASE_URL`;
+- `inspect-db` schema inspection and JSON reporting;
+- `migrate-db` migration planning, dry-run and apply mode;
+- SQL migration tracking through `affiliate_schema_migrations`;
+- isolated affiliate tables and Comas advertiser/feed seed data.
+
 Not implemented yet:
 
-- database connections or migrations;
 - row-level CSV import into the database;
-- offer import, matching or upsert logic.
+- offer import, matching or upsert logic;
+- product variants;
+- CIS front-end integration.
 
 ## Local setup
 
@@ -50,6 +59,10 @@ python -m app.main awin-list-feeds --dry-run
 python -m app.main awin-download-feed --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main preprocess-feed --advertiser 105475 --feed-id 97867
 python -m app.main preprocess-feed --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv.gz
+python -m app.main inspect-db
+python -m app.main migrate-db --plan
+python -m app.main migrate-db --dry-run
+python -m app.main migrate-db
 python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
 python -m app.main import-feeds --network awin --download-only --dry-run
 pytest
@@ -65,6 +78,12 @@ They can access Awin, download the gzip feed, inspect the header, and write a re
 
 For PR03, `preprocess-feed` parses the full CSV or gzip CSV from either a local file or the configured Awin feed URL.
 It writes a feed-quality report under `/data/reports`, including category counts, coverage metrics, exclusion counts, and a decision recommendation, but it still does not write to any database.
+
+For PR04, `inspect-db` and `migrate-db` require `DATABASE_URL`.
+`inspect-db` reports the live schema, candidate catalog tables, and existing migration state.
+`migrate-db --plan` and `migrate-db --dry-run` are non-mutating. `migrate-db` applies only pending SQL files and writes a JSON report.
+
+PR04 keeps the new affiliate schema additive-only. It references the existing `perfumes(id)` table only where the live schema is already confirmed, and it defers `product_variants` to a later PR.
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
 
@@ -106,9 +125,26 @@ Run the CLI:
 ```bash
 docker run --rm mes-fragrances-affiliate-worker --help
 docker run --rm --env-file ./affiliate-worker/.env mes-fragrances-affiliate-worker show-config
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker inspect-db
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker migrate-db --plan
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker migrate-db --dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker migrate-db
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker awin-list-feeds --dry-run
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker awin-download-feed --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker preprocess-feed --advertiser 105475 --feed-id 97867
 ```
 
 The container exposes no ports and uses `/data/feeds`, `/data/reports`, and `/data/logs`.
+
+Before the first non-dry-run `migrate-db` on the VPS, take a backup:
+
+```bash
+mkdir -p ~/db_backups
+chmod 700 ~/db_backups
+
+docker exec mes-fragrances_cis-db-1 \
+  pg_dump -U pilot -d pilot \
+  > ~/db_backups/backup_before_affiliate_pr04_$(date +%Y%m%d_%H%M%S).sql
+```
+
+Do not commit the backup, `.env`, `DATABASE_URL`, or any signed Awin URL.
