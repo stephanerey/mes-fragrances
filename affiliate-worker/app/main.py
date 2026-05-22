@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
+from app.awin import AwinCommandError, AwinService, format_report_summary
 from app.config import get_settings
 from app.logging_config import configure_logging
 
@@ -20,6 +22,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Display non-secret worker configuration.",
     )
 
+    awin_list_feeds = subparsers.add_parser(
+        "awin-list-feeds",
+        help="Discover accessible Awin feeds and locate the target feed.",
+    )
+    awin_list_feeds.add_argument("--advertiser", default="105475")
+    awin_list_feeds.add_argument("--feed-id", default="97867")
+    awin_list_feeds.add_argument("--dry-run", action="store_true")
+
+    awin_download_feed = subparsers.add_parser(
+        "awin-download-feed",
+        help="Download and inspect the target Awin feed header without DB writes.",
+    )
+    awin_download_feed.add_argument("--advertiser", required=True)
+    awin_download_feed.add_argument("--feed-id", required=True)
+    awin_download_feed.add_argument("--dry-run", action="store_true")
+
     import_local_csv = subparsers.add_parser(
         "import-local-csv",
         help="Placeholder local CSV import command for PR01.",
@@ -31,9 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     import_feeds = subparsers.add_parser(
         "import-feeds",
-        help="Placeholder remote feed import command for PR01.",
+        help="Placeholder remote feed import command for later PRs.",
     )
     import_feeds.add_argument("--network", required=True, choices=["awin"])
+    import_feeds.add_argument("--download-only", action="store_true")
     import_feeds.add_argument("--dry-run", action="store_true")
 
     return parser
@@ -56,10 +75,32 @@ def run_import_local_csv(args: argparse.Namespace) -> int:
 
 def run_import_feeds(args: argparse.Namespace) -> int:
     print(
-        "PR01 placeholder only: import-feeds parsed successfully for "
-        f"network={args.network}, dry_run={args.dry_run}. "
+        "Placeholder only: import-feeds parsed successfully for "
+        f"network={args.network}, download_only={args.download_only}, dry_run={args.dry_run}. "
         "No Awin request or database write was performed."
     )
+    return 0
+
+
+def run_awin_list_feeds(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = AwinService(settings).list_feeds(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        dry_run=args.dry_run,
+    )
+    print(format_report_summary(report, report_path))
+    return 0
+
+
+def run_awin_download_feed(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = AwinService(settings).download_feed(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        dry_run=args.dry_run,
+    )
+    print(format_report_summary(report, report_path))
     return 0
 
 
@@ -70,12 +111,20 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     configure_logging(settings.affiliate_log_level)
 
-    if args.command == "show-config":
-        return run_show_config()
-    if args.command == "import-local-csv":
-        return run_import_local_csv(args)
-    if args.command == "import-feeds":
-        return run_import_feeds(args)
+    try:
+        if args.command == "show-config":
+            return run_show_config()
+        if args.command == "awin-list-feeds":
+            return run_awin_list_feeds(args)
+        if args.command == "awin-download-feed":
+            return run_awin_download_feed(args)
+        if args.command == "import-local-csv":
+            return run_import_local_csv(args)
+        if args.command == "import-feeds":
+            return run_import_feeds(args)
+    except AwinCommandError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     parser.error(f"Unknown command: {args.command}")
     return 2

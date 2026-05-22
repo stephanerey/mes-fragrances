@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from app.config import get_settings
 from app.main import main
 
@@ -52,9 +54,51 @@ def test_import_local_csv_placeholder(monkeypatch, capsys, tmp_path) -> None:
 def test_import_feeds_placeholder(capsys) -> None:
     clear_settings_cache()
 
-    exit_code = main(["import-feeds", "--network", "awin", "--dry-run"])
+    exit_code = main(["import-feeds", "--network", "awin", "--download-only", "--dry-run"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "PR01 placeholder only" in captured.out
+    assert "Placeholder only" in captured.out
+    assert "download_only=True" in captured.out
     assert "No Awin request or database write was performed." in captured.out
+
+
+def test_awin_list_feeds_missing_credentials(monkeypatch, capsys) -> None:
+    monkeypatch.delenv("AWIN_PRODUCT_FEED_API_KEY", raising=False)
+    clear_settings_cache()
+
+    exit_code = main(["awin-list-feeds", "--dry-run"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "AWIN_PRODUCT_FEED_API_KEY" in captured.err
+
+
+def test_awin_download_feed_missing_credentials_without_configured_url(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.delenv("AWIN_PRODUCT_FEED_API_KEY", raising=False)
+    monkeypatch.delenv("AWIN_FEED_URL_105475_97867", raising=False)
+    clear_settings_cache()
+
+    exit_code = main(
+        ["awin-download-feed", "--advertiser", "105475", "--feed-id", "97867", "--dry-run"]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "AWIN_PRODUCT_FEED_API_KEY" in captured.err
+
+
+def test_show_config_still_masks_secret_values(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("AWIN_PRODUCT_FEED_API_KEY", "feed-secret")
+    clear_settings_cache()
+
+    exit_code = main(["show-config"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["awin_product_feed_api_key_configured"] is True
+    assert "feed-secret" not in captured.out

@@ -63,6 +63,18 @@ class Settings(BaseSettings):
             ),
         }
 
+    @property
+    def feeds_dir(self) -> Path:
+        return self.affiliate_data_dir / "feeds"
+
+    @property
+    def reports_dir(self) -> Path:
+        return self.affiliate_data_dir / "reports"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.affiliate_data_dir / "logs"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
