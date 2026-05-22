@@ -74,6 +74,23 @@ def test_awin_list_feeds_missing_credentials(monkeypatch, capsys) -> None:
     assert "AWIN_PRODUCT_FEED_API_KEY" in captured.err
 
 
+def test_awin_download_feed_missing_credentials_without_configured_url(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.delenv("AWIN_PRODUCT_FEED_API_KEY", raising=False)
+    monkeypatch.delenv("AWIN_FEED_URL_105475_97867", raising=False)
+    clear_settings_cache()
+
+    exit_code = main(
+        ["awin-download-feed", "--advertiser", "105475", "--feed-id", "97867", "--dry-run"]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "AWIN_PRODUCT_FEED_API_KEY" in captured.err
+
+
 def test_show_config_still_masks_secret_values(monkeypatch, capsys) -> None:
     monkeypatch.setenv("AWIN_PRODUCT_FEED_API_KEY", "feed-secret")
     clear_settings_cache()

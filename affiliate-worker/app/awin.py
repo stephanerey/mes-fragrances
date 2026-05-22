@@ -4,12 +4,13 @@ import csv
 import gzip
 import io
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import islice
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -107,6 +108,23 @@ def default_fetch(url: str) -> bytes:
 
 def build_feed_list_url(api_key: str) -> str:
     return f"https://productdata.awin.com/datafeed/list/apikey/{quote(api_key, safe='')}"
+
+
+def build_configured_feed_url_env_var(advertiser_id: str, feed_id: str) -> str:
+    sanitized_advertiser_id = re.sub(r"[^0-9A-Za-z]+", "_", advertiser_id.strip())
+    sanitized_feed_id = re.sub(r"[^0-9A-Za-z]+", "_", feed_id.strip())
+    return f"AWIN_FEED_URL_{sanitized_advertiser_id}_{sanitized_feed_id}"
+
+
+def get_configured_feed_url(
+    advertiser_id: str,
+    feed_id: str,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[str, str | None]:
+    env_var = build_configured_feed_url_env_var(advertiser_id, feed_id)
+    env = environ if environ is not None else os.environ
+    configured_url = env.get(env_var)
+    return env_var, configured_url.strip() if configured_url and configured_url.strip() else None
 
 
 def parse_feed_list_csv(payload: bytes) -> list[AwinFeedEntry]:
@@ -230,9 +248,15 @@ def _utc_now() -> str:
 
 
 class AwinService:
-    def __init__(self, settings: Settings, fetcher: AwinFetcher | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        fetcher: AwinFetcher | None = None,
+        environ: Mapping[str, str] | None = None,
+    ) -> None:
         self.settings = settings
         self.fetcher = fetcher or default_fetch
+        self.environ = environ if environ is not None else os.environ
 
     def require_product_feed_api_key(self) -> str:
         secret = self.settings.awin_product_feed_api_key
@@ -316,6 +340,11 @@ class AwinService:
         feed_id: str,
         dry_run: bool,
     ) -> tuple[dict[str, object], Path]:
+        configured_env_var, configured_url = get_configured_feed_url(
+            advertiser_id=advertiser_id,
+            feed_id=feed_id,
+            environ=self.environ,
+        )
         report: dict[str, object] = {
             "checked_at": _utc_now(),
             "status": "error",
@@ -325,44 +354,59 @@ class AwinService:
             "advertiser_id": advertiser_id,
             "feed_id": feed_id,
             "downloaded": False,
+            "configured_feed_url_env_var": configured_env_var,
+            "download_url_source": "configured_env" if configured_url else "feed_list",
+            "download_url_redacted": bool(configured_url),
         }
 
         try:
-            entries, list_url = self.fetch_feed_entries()
-            report["feed_list_url"] = list_url
-            report["accessible_feed_count"] = len(entries)
+            target_feed: AwinFeedEntry | None = None
+            selected_download_url: str | None = configured_url
 
-            target_feed = find_feed(entries, advertiser_id=advertiser_id, feed_id=feed_id)
-            report["feed_found"] = target_feed is not None
+            if configured_url is None:
+                entries, list_url = self.fetch_feed_entries()
+                report["feed_list_url"] = list_url
+                report["accessible_feed_count"] = len(entries)
 
-            if target_feed is None:
-                raise AwinCommandError(
-                    "Feed "
-                    f"{feed_id} for advertiser {advertiser_id} was not found in the Awin "
-                    "feed list"
-                )
-            if not target_feed.download_url:
-                raise AwinCommandError(
-                    "Feed "
-                    f"{feed_id} for advertiser {advertiser_id} has no download URL in the "
-                    "Awin feed list"
-                )
+                target_feed = find_feed(entries, advertiser_id=advertiser_id, feed_id=feed_id)
+                report["feed_found"] = target_feed is not None
+
+                if target_feed is None:
+                    raise AwinCommandError(
+                        "Feed "
+                        f"{feed_id} for advertiser {advertiser_id} was not found in the Awin "
+                        "feed list"
+                    )
+                if not target_feed.download_url:
+                    raise AwinCommandError(
+                        "Feed "
+                        f"{feed_id} for advertiser {advertiser_id} has no download URL in the "
+                        "Awin feed list"
+                    )
+                selected_download_url = target_feed.download_url
+            else:
+                report["feed_found"] = True
 
             report.update(
                 {
-                    "advertiser_name": target_feed.advertiser_name,
-                    "feed_name": target_feed.feed_name,
-                    "language": target_feed.language,
-                    "vertical": target_feed.vertical,
-                    "membership_status": target_feed.membership_status,
-                    "remote_last_imported": target_feed.last_imported,
-                    "download_url": redact_url(target_feed.download_url),
-                    "download_url_redacted": True,
+                    "advertiser_name": target_feed.advertiser_name if target_feed else None,
+                    "feed_name": target_feed.feed_name if target_feed else None,
+                    "language": target_feed.language if target_feed else None,
+                    "vertical": target_feed.vertical if target_feed else None,
+                    "membership_status": target_feed.membership_status if target_feed else None,
+                    "remote_last_imported": target_feed.last_imported if target_feed else None,
+                    "download_url": redact_url(selected_download_url),
+                    "download_url_redacted": bool(selected_download_url),
                 }
             )
 
-            metadata = parse_download_url_metadata(target_feed.download_url)
-            payload = self.fetcher(target_feed.download_url)
+            metadata = parse_download_url_metadata(selected_download_url)
+            if selected_download_url is None:
+                raise AwinCommandError(
+                    f"No Awin download URL is available for advertiser {advertiser_id} "
+                    f"feed {feed_id}"
+                )
+            payload = self.fetcher(selected_download_url)
             inspection = inspect_gzip_csv(payload, delimiter_hint=metadata["delimiter"])
             coverage = compare_columns(inspection.header)
 
@@ -399,6 +443,7 @@ class AwinService:
             raise AwinCommandError(message) from exc
 
 
+
 def format_report_summary(report: dict[str, object], report_path: Path) -> str:
     summary = {
         "status": report.get("status"),
@@ -410,6 +455,7 @@ def format_report_summary(report: dict[str, object], report_path: Path) -> str:
         "remote_last_imported": report.get("remote_last_imported"),
         "header_count": report.get("header_count"),
         "rows_sampled": report.get("rows_sampled"),
+        "download_url_source": report.get("download_url_source"),
         "report_path": str(report_path),
     }
     return json.dumps(summary, indent=2, sort_keys=True)

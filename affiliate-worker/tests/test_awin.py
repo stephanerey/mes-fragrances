@@ -9,8 +9,10 @@ import pytest
 from app.awin import (
     AwinCommandError,
     AwinService,
+    build_configured_feed_url_env_var,
     build_feed_list_url,
     find_feed,
+    get_configured_feed_url,
     inspect_gzip_csv,
     parse_feed_list_csv,
     redact_url,
@@ -185,6 +187,32 @@ def test_redact_url_hides_api_keys_and_tokens() -> None:
     assert "foo=bar" in redacted
 
 
+def test_configured_feed_url_lookup_by_advertiser_and_feed_id() -> None:
+    env_var, configured_url = get_configured_feed_url(
+        advertiser_id="105475",
+        feed_id="97867",
+        environ={"AWIN_FEED_URL_105475_97867": SAMPLE_DOWNLOAD_URL},
+    )
+
+    assert env_var == "AWIN_FEED_URL_105475_97867"
+    assert configured_url == SAMPLE_DOWNLOAD_URL
+
+
+def test_configured_feed_url_supports_multiple_urls() -> None:
+    env = {
+        "AWIN_FEED_URL_105475_97867": SAMPLE_DOWNLOAD_URL,
+        "AWIN_FEED_URL_999999_12345": "https://example.test/feed-2",
+    }
+
+    first_var, first_url = get_configured_feed_url("105475", "97867", environ=env)
+    second_var, second_url = get_configured_feed_url("999999", "12345", environ=env)
+
+    assert first_var == build_configured_feed_url_env_var("105475", "97867")
+    assert first_url == SAMPLE_DOWNLOAD_URL
+    assert second_var == build_configured_feed_url_env_var("999999", "12345")
+    assert second_url == "https://example.test/feed-2"
+
+
 def test_inspect_gzip_csv_parses_header_and_sample_rows() -> None:
     inspection = inspect_gzip_csv(build_gzip_feed(), delimiter_hint=",")
 
@@ -246,6 +274,69 @@ def test_awin_download_feed_writes_report_with_column_coverage(tmp_path: Path) -
     assert report_path.exists()
     saved = json.loads(report_path.read_text(encoding="utf-8"))
     assert saved["download_url_redacted"] is True
+    assert "super-secret" not in json.dumps(saved)
+
+
+def test_awin_download_feed_uses_configured_url_before_feed_list(tmp_path: Path) -> None:
+    settings = build_settings(tmp_path, api_key="")
+    fetcher = FakeFetcher({SAMPLE_DOWNLOAD_URL: build_gzip_feed()})
+
+    report, _ = AwinService(
+        settings,
+        fetcher=fetcher,
+        environ={"AWIN_FEED_URL_105475_97867": SAMPLE_DOWNLOAD_URL},
+    ).download_feed(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+    )
+
+    assert fetcher.calls == [SAMPLE_DOWNLOAD_URL]
+    assert report["download_url_source"] == "configured_env"
+    assert report["configured_feed_url_env_var"] == "AWIN_FEED_URL_105475_97867"
+    assert report["download_url_redacted"] is True
+    assert report["feed_found"] is True
+
+
+def test_awin_download_feed_falls_back_to_feed_list_url(tmp_path: Path) -> None:
+    settings = build_settings(tmp_path)
+    feed_list_url = build_feed_list_url("feed-key")
+    fetcher = FakeFetcher(
+        {
+            feed_list_url: SAMPLE_FEED_LIST.encode("utf-8"),
+            SAMPLE_DOWNLOAD_URL: build_gzip_feed(),
+        }
+    )
+
+    report, _ = AwinService(settings, fetcher=fetcher, environ={}).download_feed(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+    )
+
+    assert fetcher.calls == [feed_list_url, SAMPLE_DOWNLOAD_URL]
+    assert report["download_url_source"] == "feed_list"
+    assert report["configured_feed_url_env_var"] == "AWIN_FEED_URL_105475_97867"
+    assert report["remote_last_imported"] == "2026-05-21 12:00:00"
+
+
+def test_configured_feed_url_is_redacted_in_report(tmp_path: Path) -> None:
+    settings = build_settings(tmp_path, api_key="")
+    fetcher = FakeFetcher({SAMPLE_DOWNLOAD_URL: build_gzip_feed()})
+
+    report, report_path = AwinService(
+        settings,
+        fetcher=fetcher,
+        environ={"AWIN_FEED_URL_105475_97867": SAMPLE_DOWNLOAD_URL},
+    ).download_feed(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+    )
+
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["download_url"] == redact_url(SAMPLE_DOWNLOAD_URL)
+    assert saved["download_url"] == redact_url(SAMPLE_DOWNLOAD_URL)
     assert "super-secret" not in json.dumps(saved)
 
 
