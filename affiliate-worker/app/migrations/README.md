@@ -5,6 +5,8 @@ PR04 uses explicit SQL files plus a small Python runner.
 Structure:
 
 - `0001_affiliate_foundation.sql`: additive affiliate schema foundation and Comas seed data.
+- `0002_raw_staging_idempotency.sql`: raw staging deduplication safety index on
+  `(advertiser_id, raw_hash)`.
 
 Rules:
 
@@ -50,3 +52,7 @@ Rollback notes:
 
 PR04 intentionally defers `product_variants`.
 The live CIS schema exposes `perfumes(id uuid, slug, name, brand, ...)`, so the new affiliate tables reference `perfumes(id)` only where that relationship is already confirmed and safe.
+
+PR05 keeps raw staging additive-only as well. The extra index in `0002` prevents
+uncontrolled duplicate `raw_feed_items` rows when a feed row has no stable
+external IDs but its raw payload hash is identical to a previously imported row.
