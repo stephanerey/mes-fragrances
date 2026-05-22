@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from app.config import get_settings
 from app.main import main
@@ -10,15 +11,13 @@ def clear_settings_cache() -> None:
     get_settings.cache_clear()
 
 
-
-def isolate_settings(monkeypatch, tmp_path) -> None:
+def isolate_settings(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AFFILIATE_DATA_DIR", str(tmp_path / "data"))
     clear_settings_cache()
 
 
-
-def test_show_config_masks_secrets(monkeypatch, capsys, tmp_path) -> None:
+def test_show_config_masks_secrets(monkeypatch, capsys, tmp_path: Path) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:super-secret@db:5432/app")
     monkeypatch.setenv("AWIN_API_TOKEN", "super-secret-token")
@@ -36,8 +35,7 @@ def test_show_config_masks_secrets(monkeypatch, capsys, tmp_path) -> None:
     assert '"awin_product_feed_api_key_configured": true' in captured.out
 
 
-
-def test_import_local_csv_placeholder(monkeypatch, capsys, tmp_path) -> None:
+def test_import_local_csv_placeholder(monkeypatch, capsys, tmp_path: Path) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     clear_settings_cache()
@@ -62,8 +60,7 @@ def test_import_local_csv_placeholder(monkeypatch, capsys, tmp_path) -> None:
     assert "No CSV parsing" in captured.out
 
 
-
-def test_import_feeds_placeholder(monkeypatch, capsys, tmp_path) -> None:
+def test_import_feeds_placeholder(monkeypatch, capsys, tmp_path: Path) -> None:
     isolate_settings(monkeypatch, tmp_path)
 
     exit_code = main(["import-feeds", "--network", "awin", "--download-only", "--dry-run"])
@@ -75,8 +72,7 @@ def test_import_feeds_placeholder(monkeypatch, capsys, tmp_path) -> None:
     assert "No Awin request or database write was performed." in captured.out
 
 
-
-def test_awin_list_feeds_missing_credentials(monkeypatch, capsys, tmp_path) -> None:
+def test_awin_list_feeds_missing_credentials(monkeypatch, capsys, tmp_path: Path) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.delenv("AWIN_PRODUCT_FEED_API_KEY", raising=False)
     clear_settings_cache()
@@ -88,11 +84,10 @@ def test_awin_list_feeds_missing_credentials(monkeypatch, capsys, tmp_path) -> N
     assert "AWIN_PRODUCT_FEED_API_KEY" in captured.err
 
 
-
 def test_awin_download_feed_missing_credentials_without_configured_url(
     monkeypatch,
     capsys,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.delenv("AWIN_PRODUCT_FEED_API_KEY", raising=False)
@@ -108,8 +103,7 @@ def test_awin_download_feed_missing_credentials_without_configured_url(
     assert "AWIN_PRODUCT_FEED_API_KEY" in captured.err
 
 
-
-def test_show_config_still_masks_secret_values(monkeypatch, capsys, tmp_path) -> None:
+def test_show_config_still_masks_secret_values(monkeypatch, capsys, tmp_path: Path) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.setenv("AWIN_PRODUCT_FEED_API_KEY", "feed-secret")
     clear_settings_cache()
@@ -123,8 +117,11 @@ def test_show_config_still_masks_secret_values(monkeypatch, capsys, tmp_path) ->
     assert "feed-secret" not in captured.out
 
 
-
-def test_preprocess_feed_missing_credentials_without_path(monkeypatch, capsys, tmp_path) -> None:
+def test_preprocess_feed_missing_credentials_without_path(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.delenv("AWIN_PRODUCT_FEED_API_KEY", raising=False)
     monkeypatch.delenv("AWIN_FEED_URL_105475_97867", raising=False)
@@ -137,8 +134,11 @@ def test_preprocess_feed_missing_credentials_without_path(monkeypatch, capsys, t
     assert "AWIN_PRODUCT_FEED_API_KEY" in captured.err
 
 
-
-def test_preprocess_feed_local_path_without_credentials(monkeypatch, capsys, tmp_path) -> None:
+def test_preprocess_feed_local_path_without_credentials(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.delenv("AWIN_PRODUCT_FEED_API_KEY", raising=False)
     monkeypatch.delenv("AWIN_FEED_URL_105475_97867", raising=False)
@@ -146,8 +146,15 @@ def test_preprocess_feed_local_path_without_credentials(monkeypatch, capsys, tmp
 
     csv_path = tmp_path / "local.csv"
     csv_path.write_text(
-        "aw_product_id,merchant_product_id,product_name,aw_deep_link,merchant_image_url,description,merchant_category,search_price,merchant_name,merchant_id,category_name,category_id,currency,display_price,data_feed_id\n"
-        "1,sku-1,Test Product,https://example.test/deep-link,https://example.test/image.jpg,Description,Fragrance,10.00,Comas,105475,Fragrance,12,EUR,10,97867\n",
+        (
+            "aw_product_id,merchant_product_id,product_name,aw_deep_link,"
+            "merchant_image_url,description,merchant_category,search_price,"
+            "merchant_name,merchant_id,category_name,category_id,currency,"
+            "display_price,data_feed_id\n"
+            "1,sku-1,Test Product,https://example.test/deep-link,"
+            "https://example.test/image.jpg,Description,Fragrance,10.00,"
+            "Comas,105475,Fragrance,12,EUR,10,97867\n"
+        ),
         encoding="utf-8",
     )
 
@@ -167,3 +174,27 @@ def test_preprocess_feed_local_path_without_credentials(monkeypatch, capsys, tmp
     assert exit_code == 0
     assert "rows_total=1" in captured.out
     assert "source=local_file" in captured.out
+
+
+def test_inspect_db_requires_database_url(monkeypatch, capsys, tmp_path: Path) -> None:
+    isolate_settings(monkeypatch, tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    clear_settings_cache()
+
+    exit_code = main(["inspect-db"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "DATABASE_URL" in captured.err
+
+
+def test_migrate_db_requires_database_url(monkeypatch, capsys, tmp_path: Path) -> None:
+    isolate_settings(monkeypatch, tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    clear_settings_cache()
+
+    exit_code = main(["migrate-db", "--dry-run"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "DATABASE_URL" in captured.err

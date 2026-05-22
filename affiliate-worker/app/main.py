@@ -7,6 +7,12 @@ from pathlib import Path
 
 from app.awin import AwinCommandError, AwinService, format_report_summary
 from app.config import get_settings
+from app.db import (
+    DatabaseService,
+    DbCommandError,
+    format_inspect_db_summary,
+    format_migrate_db_summary,
+)
 from app.logging_config import configure_logging
 from app.preprocessing import FeedPreprocessor, format_preprocess_report_summary
 
@@ -46,6 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
     preprocess_feed.add_argument("--advertiser", required=True)
     preprocess_feed.add_argument("--feed-id", required=True)
     preprocess_feed.add_argument("--path", type=Path)
+
+    subparsers.add_parser(
+        "inspect-db",
+        help="Inspect the connected database schema and existing catalog tables.",
+    )
+
+    migrate_db = subparsers.add_parser(
+        "migrate-db",
+        help="Plan or apply affiliate-worker SQL migrations.",
+    )
+    migrate_db.add_argument("--dry-run", action="store_true")
+    migrate_db.add_argument("--plan", action="store_true")
 
     import_local_csv = subparsers.add_parser(
         "import-local-csv",
@@ -124,6 +142,23 @@ def run_preprocess_feed(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_inspect_db() -> int:
+    settings = get_settings()
+    report, report_path = DatabaseService(settings).inspect_db()
+    print(format_inspect_db_summary(report, report_path))
+    return 0
+
+
+def run_migrate_db(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = DatabaseService(settings).migrate_db(
+        dry_run=args.dry_run,
+        plan_only=args.plan,
+    )
+    print(format_migrate_db_summary(report, report_path))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -140,11 +175,15 @@ def main(argv: list[str] | None = None) -> int:
             return run_awin_download_feed(args)
         if args.command == "preprocess-feed":
             return run_preprocess_feed(args)
+        if args.command == "inspect-db":
+            return run_inspect_db()
+        if args.command == "migrate-db":
+            return run_migrate_db(args)
         if args.command == "import-local-csv":
             return run_import_local_csv(args)
         if args.command == "import-feeds":
             return run_import_feeds(args)
-    except AwinCommandError as exc:
+    except (AwinCommandError, DbCommandError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
