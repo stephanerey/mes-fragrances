@@ -8,6 +8,7 @@ from pathlib import Path
 from app.awin import AwinCommandError, AwinService, format_report_summary
 from app.config import get_settings
 from app.logging_config import configure_logging
+from app.preprocessing import FeedPreprocessor, format_preprocess_report_summary
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,6 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
     awin_download_feed.add_argument("--advertiser", required=True)
     awin_download_feed.add_argument("--feed-id", required=True)
     awin_download_feed.add_argument("--dry-run", action="store_true")
+
+    preprocess_feed = subparsers.add_parser(
+        "preprocess-feed",
+        help="Parse the full feed and write a non-mutating preprocessing quality report.",
+    )
+    preprocess_feed.add_argument("--advertiser", required=True)
+    preprocess_feed.add_argument("--feed-id", required=True)
+    preprocess_feed.add_argument("--path", type=Path)
 
     import_local_csv = subparsers.add_parser(
         "import-local-csv",
@@ -104,6 +113,17 @@ def run_awin_download_feed(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_preprocess_feed(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = FeedPreprocessor(settings).preprocess_feed(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        path=args.path,
+    )
+    print(format_preprocess_report_summary(report, report_path))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -118,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_awin_list_feeds(args)
         if args.command == "awin-download-feed":
             return run_awin_download_feed(args)
+        if args.command == "preprocess-feed":
+            return run_preprocess_feed(args)
         if args.command == "import-local-csv":
             return run_import_local_csv(args)
         if args.command == "import-feeds":

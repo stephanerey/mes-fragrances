@@ -5,7 +5,7 @@ from pathlib import Path
 from app.config import Settings
 
 
-def test_settings_defaults(monkeypatch) -> None:
+def test_settings_defaults(monkeypatch, tmp_path) -> None:
     env_keys = [
         "DATABASE_URL",
         "AFFILIATE_IMPORT_MODE",
@@ -18,6 +18,7 @@ def test_settings_defaults(monkeypatch) -> None:
         "AWIN_API_TOKEN",
         "AWIN_PRODUCT_FEED_API_KEY",
     ]
+    monkeypatch.chdir(tmp_path)
     for key in env_keys:
         monkeypatch.delenv(key, raising=False)
 
@@ -32,7 +33,9 @@ def test_settings_defaults(monkeypatch) -> None:
     assert settings.database_url is None
 
 
-def test_safe_dict_reports_configuration_without_secret_values(monkeypatch) -> None:
+
+def test_safe_dict_reports_configuration_without_secret_values(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:password@db:5432/mes_fragrances")
     monkeypatch.setenv("AFFILIATE_DATA_DIR", "/srv/affiliate-data")
     monkeypatch.setenv("AWIN_PUBLISHER_ID", "pub-1")

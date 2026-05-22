@@ -15,6 +15,7 @@ venv/
 
 # Worker runtime data
 affiliate-worker-data/
+.tmp-affiliate-worker-data/
 affiliate-worker/data/
 data/
 
