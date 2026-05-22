@@ -21,6 +21,7 @@ AFFILIATE_TABLES = [
     "affiliate_feeds",
     "feed_import_runs",
     "raw_feed_items",
+    "normalized_feed_items",
     "offers",
     "product_match_candidates",
     "external_product_mappings",

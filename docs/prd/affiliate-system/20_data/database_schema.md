@@ -92,6 +92,51 @@ CREATE TABLE raw_feed_items (
 );
 ```
 
+## normalized_feed_items
+
+```sql
+CREATE TABLE normalized_feed_items (
+    id BIGSERIAL PRIMARY KEY,
+    raw_feed_item_id BIGINT NOT NULL REFERENCES raw_feed_items(id) ON DELETE CASCADE,
+    advertiser_id BIGINT NOT NULL REFERENCES advertisers(id) ON DELETE CASCADE,
+    feed_id BIGINT REFERENCES affiliate_feeds(id) ON DELETE SET NULL,
+    network TEXT NOT NULL,
+    network_product_id TEXT,
+    merchant_product_id TEXT,
+    title TEXT NOT NULL,
+    normalized_title TEXT NOT NULL,
+    description TEXT,
+    brand TEXT,
+    normalized_brand TEXT,
+    category TEXT,
+    normalized_category TEXT,
+    merchant_category TEXT,
+    price NUMERIC(12, 2),
+    currency TEXT,
+    delivery_cost NUMERIC(12, 2),
+    affiliate_url TEXT,
+    merchant_url TEXT,
+    image_url TEXT,
+    ean TEXT,
+    gtin TEXT,
+    upc TEXT,
+    mpn TEXT,
+    in_stock BOOLEAN,
+    stock_status TEXT,
+    concentration TEXT,
+    volume_ml NUMERIC(8, 2),
+    is_fragrance BOOLEAN NOT NULL DEFAULT FALSE,
+    is_excluded BOOLEAN NOT NULL DEFAULT FALSE,
+    exclusion_reasons JSONB NOT NULL DEFAULT '[]',
+    missing_required_columns JSONB NOT NULL DEFAULT '[]',
+    missing_recommended_columns JSONB NOT NULL DEFAULT '[]',
+    normalized_payload JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(raw_feed_item_id)
+);
+```
+
 ## brands
 
 If the existing CIS database does not already have a brand table, create or adapt one.

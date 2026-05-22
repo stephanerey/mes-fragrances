@@ -208,6 +208,18 @@ def test_preprocess_feed_local_path_without_credentials(
     assert "source=local_file" in captured.out
 
 
+def test_normalize_feed_requires_database_url(monkeypatch, capsys, tmp_path: Path) -> None:
+    isolate_settings(monkeypatch, tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    clear_settings_cache()
+
+    exit_code = main(["normalize-feed", "--advertiser", "105475", "--feed-id", "97867"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "DATABASE_URL" in captured.err
+
+
 def test_inspect_db_requires_database_url(monkeypatch, capsys, tmp_path: Path) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)
