@@ -14,6 +14,11 @@ from app.db import (
     format_migrate_db_summary,
 )
 from app.logging_config import configure_logging
+from app.normalization import (
+    NormalizationError,
+    NormalizationService,
+    format_normalization_report_summary,
+)
 from app.preprocessing import FeedPreprocessor, format_preprocess_report_summary
 from app.raw_staging import (
     RawStagingError,
@@ -57,6 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
     preprocess_feed.add_argument("--advertiser", required=True)
     preprocess_feed.add_argument("--feed-id", required=True)
     preprocess_feed.add_argument("--path", type=Path)
+
+    normalize_feed = subparsers.add_parser(
+        "normalize-feed",
+        help="Normalize raw staged feed rows and report actionable fragrance rows.",
+    )
+    normalize_feed.add_argument("--advertiser", required=True)
+    normalize_feed.add_argument("--feed-id", required=True)
+    normalize_feed.add_argument("--dry-run", action="store_true")
+    normalize_feed.add_argument("--import-run-id", type=int)
+    normalize_feed.add_argument("--limit", type=int)
 
     subparsers.add_parser(
         "inspect-db",
@@ -169,6 +184,19 @@ def run_preprocess_feed(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_normalize_feed(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = NormalizationService(settings).normalize_feed(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        dry_run=args.dry_run,
+        import_run_id=args.import_run_id,
+        limit=args.limit,
+    )
+    print(format_normalization_report_summary(report, report_path))
+    return 0
+
+
 def run_inspect_db() -> int:
     settings = get_settings()
     report, report_path = DatabaseService(settings).inspect_db()
@@ -202,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_awin_download_feed(args)
         if args.command == "preprocess-feed":
             return run_preprocess_feed(args)
+        if args.command == "normalize-feed":
+            return run_normalize_feed(args)
         if args.command == "inspect-db":
             return run_inspect_db()
         if args.command == "migrate-db":
@@ -210,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             return run_import_local_csv(args)
         if args.command == "import-feeds":
             return run_import_feeds(args)
-    except (AwinCommandError, DbCommandError, RawStagingError) as exc:
+    except (AwinCommandError, DbCommandError, RawStagingError, NormalizationError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

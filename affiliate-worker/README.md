@@ -37,6 +37,15 @@ Implemented in PR05:
 - `raw_feed_items` persistence with canonical `raw_hash` deduplication;
 - source payload SHA256 calculation and import reports under `/data/reports`.
 
+Implemented in PR06:
+
+- normalized feed item persistence in `normalized_feed_items`;
+- `normalize-feed` command for dry-run and persisted normalization;
+- text normalization, HTML entity decoding, accent removal and punctuation cleanup;
+- price, currency, concentration, volume, stock, image and URL parsing;
+- fragrance/actionable filtering and exclusion reason detection;
+- JSON normalization reports without touching offers or candidates.
+
 Not implemented yet:
 
 - offer import, matching or upsert logic;
@@ -66,6 +75,8 @@ python -m app.main awin-list-feeds --dry-run
 python -m app.main awin-download-feed --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main preprocess-feed --advertiser 105475 --feed-id 97867
 python -m app.main preprocess-feed --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv.gz
+python -m app.main normalize-feed --advertiser 105475 --feed-id 97867 --dry-run
+python -m app.main normalize-feed --advertiser 105475 --feed-id 97867
 python -m app.main inspect-db
 python -m app.main migrate-db --plan
 python -m app.main migrate-db --dry-run
@@ -102,6 +113,12 @@ computes the source SHA256, and writes a JSON report without inserting
 Non-dry-run import creates one `feed_import_runs` row and stores every CSV row as
 JSON in `raw_feed_items.raw_payload`. Duplicate rows are ignored safely through
 `ON CONFLICT DO NOTHING`, and the report includes duplicate counts.
+
+For PR06, `normalize-feed` reads staged rows from `raw_feed_items`, selects the
+latest successful import run that actually persisted rows, normalizes each row,
+detects fragrance/exclusion signals, and writes a JSON report under `/data/reports`.
+In non-dry-run mode, it upserts `normalized_feed_items` by `raw_feed_item_id`.
+It does not create offers, candidates, mappings, variants, or modify CIS catalog tables.
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
 
@@ -150,6 +167,8 @@ docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-work
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker awin-list-feeds --dry-run
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker awin-download-feed --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker preprocess-feed --advertiser 105475 --feed-id 97867
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker normalize-feed --advertiser 105475 --feed-id 97867 --dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker normalize-feed --advertiser 105475 --feed-id 97867
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867

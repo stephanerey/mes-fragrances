@@ -7,6 +7,8 @@ Structure:
 - `0001_affiliate_foundation.sql`: additive affiliate schema foundation and Comas seed data.
 - `0002_raw_staging_idempotency.sql`: raw staging deduplication safety index on
   `(advertiser_id, raw_hash)`.
+- `0003_normalized_feed_items.sql`: additive normalized feed table for traceable,
+  idempotent PR06 normalization output.
 
 Rules:
 
@@ -43,6 +45,7 @@ Rollback notes:
    `external_product_mappings`,
    `product_match_candidates`,
    `offers`,
+   `normalized_feed_items`,
    `raw_feed_items`,
    `feed_import_runs`,
    `affiliate_feeds`,
@@ -56,3 +59,8 @@ The live CIS schema exposes `perfumes(id uuid, slug, name, brand, ...)`, so the 
 PR05 keeps raw staging additive-only as well. The extra index in `0002` prevents
 uncontrolled duplicate `raw_feed_items` rows when a feed row has no stable
 external IDs but its raw payload hash is identical to a previously imported row.
+
+PR06 adds `normalized_feed_items` as a traceable, retry-safe layer between raw
+staging and future matching/upsert logic. It stores normalized fragrance/filter
+signals without touching `offers`, `product_match_candidates`,
+`external_product_mappings`, `perfumes`, or `perfume_offers`.
