@@ -46,11 +46,23 @@ Implemented in PR06:
 - fragrance/actionable filtering and exclusion reason detection;
 - JSON normalization reports without touching offers or candidates.
 
+Implemented in PR07:
+
+- conservative `match-offers` command over `normalized_feed_items`;
+- locked external mapping lookup and optional exact identifier matching when the
+  catalog exposes compatible identifier fields;
+- deterministic and guarded fuzzy matching against the CIS `perfumes` catalog;
+- affiliate `offers` upsert only for confident matches;
+- price change tracking, `last_seen_at` refresh and conservative stale offer
+  deactivation;
+- JSON matching reports without touching `perfume_offers`, candidates, mappings
+  or catalog tables.
+
 Not implemented yet:
 
-- offer import, matching or upsert logic;
 - product variants;
 - CIS front-end integration.
+- product candidates/manual review workflow.
 
 ## Local setup
 
@@ -77,6 +89,8 @@ python -m app.main preprocess-feed --advertiser 105475 --feed-id 97867
 python -m app.main preprocess-feed --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv.gz
 python -m app.main normalize-feed --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main normalize-feed --advertiser 105475 --feed-id 97867
+python -m app.main match-offers --advertiser 105475 --feed-id 97867 --dry-run
+python -m app.main match-offers --advertiser 105475 --feed-id 97867
 python -m app.main inspect-db
 python -m app.main migrate-db --plan
 python -m app.main migrate-db --dry-run
@@ -119,6 +133,14 @@ latest successful import run that actually persisted rows, normalizes each row,
 detects fragrance/exclusion signals, and writes a JSON report under `/data/reports`.
 In non-dry-run mode, it upserts `normalized_feed_items` by `raw_feed_item_id`.
 It does not create offers, candidates, mappings, variants, or modify CIS catalog tables.
+
+For PR07, `match-offers` reads normalized rows from `normalized_feed_items`,
+limits processing to actionable fragrance rows, and tries matching in this order:
+locked external mappings, exact identifiers when the catalog exposes compatible
+fields, deterministic brand/name keys, then guarded fuzzy matching.
+Only confident matches create or update affiliate `offers`; excluded rows,
+ambiguous rows, review rows and unmatched rows do not create offers.
+`match-offers --dry-run` never mutates `offers`.
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
 
@@ -169,6 +191,8 @@ docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-d
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker preprocess-feed --advertiser 105475 --feed-id 97867
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker normalize-feed --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker normalize-feed --advertiser 105475 --feed-id 97867
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker match-offers --advertiser 105475 --feed-id 97867 --dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker match-offers --advertiser 105475 --feed-id 97867
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867

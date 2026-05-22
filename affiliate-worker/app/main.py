@@ -14,6 +14,11 @@ from app.db import (
     format_migrate_db_summary,
 )
 from app.logging_config import configure_logging
+from app.matching import (
+    MatchingError,
+    MatchingService,
+    format_matching_report_summary,
+)
 from app.normalization import (
     NormalizationError,
     NormalizationService,
@@ -72,6 +77,18 @@ def build_parser() -> argparse.ArgumentParser:
     normalize_feed.add_argument("--dry-run", action="store_true")
     normalize_feed.add_argument("--import-run-id", type=int)
     normalize_feed.add_argument("--limit", type=int)
+
+    match_offers = subparsers.add_parser(
+        "match-offers",
+        help="Match normalized fragrance rows to the CIS catalog and upsert affiliate offers.",
+    )
+    match_offers.add_argument("--advertiser", required=True)
+    match_offers.add_argument("--feed-id", required=True)
+    match_offers.add_argument("--dry-run", action="store_true")
+    match_offers.add_argument("--limit", type=int)
+    match_offers.add_argument("--min-score", type=int)
+    match_offers.add_argument("--disable-fuzzy", action="store_true")
+    match_offers.add_argument("--no-stale-update", action="store_true")
 
     subparsers.add_parser(
         "inspect-db",
@@ -197,6 +214,21 @@ def run_normalize_feed(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_match_offers(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = MatchingService(settings).match_offers(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        dry_run=args.dry_run,
+        limit=args.limit,
+        min_score=args.min_score,
+        disable_fuzzy=args.disable_fuzzy,
+        no_stale_update=args.no_stale_update,
+    )
+    print(format_matching_report_summary(report, report_path))
+    return 0
+
+
 def run_inspect_db() -> int:
     settings = get_settings()
     report, report_path = DatabaseService(settings).inspect_db()
@@ -232,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_preprocess_feed(args)
         if args.command == "normalize-feed":
             return run_normalize_feed(args)
+        if args.command == "match-offers":
+            return run_match_offers(args)
         if args.command == "inspect-db":
             return run_inspect_db()
         if args.command == "migrate-db":
@@ -240,7 +274,13 @@ def main(argv: list[str] | None = None) -> int:
             return run_import_local_csv(args)
         if args.command == "import-feeds":
             return run_import_feeds(args)
-    except (AwinCommandError, DbCommandError, RawStagingError, NormalizationError) as exc:
+    except (
+        AwinCommandError,
+        DbCommandError,
+        RawStagingError,
+        NormalizationError,
+        MatchingError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
