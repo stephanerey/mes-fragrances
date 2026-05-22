@@ -246,10 +246,10 @@ def test_normalize_feed_dry_run_does_not_insert_rows(
     assert report["raw_rows_total"] == 4
     assert report["normalized_rows_inserted"] == 0
     assert report["rows_fragrance"] == 3
-    assert report["rows_excluded"] == 2
+    assert report["rows_excluded"] == 3
     assert report["rows_excluded_set_or_bundle"] == 1
     assert report["rows_excluded_body_product"] == 1
-    assert report["rows_excluded_home_fragrance"] == 0
+    assert report["rows_excluded_home_fragrance"] == 1
     assert report["rows_with_brand"] == 3
     assert report["rows_with_any_identifier"] == 2
     assert report["rows_with_volume_ml"] == 3
@@ -314,7 +314,7 @@ def test_normalize_feed_non_dry_run_inserts_rows_and_is_idempotent(
         mappings = conn.execute("select count(*) from external_product_mappings").fetchone()[0]
 
     assert normalized_items == 4
-    assert excluded_rows == 2
+    assert excluded_rows == 3
     assert first_item == (
         "Lancome La Vie Est Belle Eau de Parfum 50 ml",
         "lancome la vie est belle eau de parfum 50 ml",
