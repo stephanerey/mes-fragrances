@@ -9,6 +9,8 @@ Structure:
   `(advertiser_id, raw_hash)`.
 - `0003_normalized_feed_items.sql`: additive normalized feed table for traceable,
   idempotent PR06 normalization output.
+- `0004_product_candidate_dedupe.sql`: additive `dedupe_key` support and unique
+  index for idempotent PR08 candidate upserts.
 
 Rules:
 
@@ -64,3 +66,8 @@ PR06 adds `normalized_feed_items` as a traceable, retry-safe layer between raw
 staging and future matching/upsert logic. It stores normalized fragrance/filter
 signals without touching `offers`, `product_match_candidates`,
 `external_product_mappings`, `perfumes`, or `perfume_offers`.
+
+PR08 keeps `product_match_candidates` additive-only as well. The new
+`dedupe_key` column plus partial unique index on `(advertiser_id, dedupe_key)`
+allow repeated candidate-generation runs to update or preserve an existing
+review record instead of creating uncontrolled duplicates.
