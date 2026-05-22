@@ -15,6 +15,11 @@ from app.db import (
 )
 from app.logging_config import configure_logging
 from app.preprocessing import FeedPreprocessor, format_preprocess_report_summary
+from app.raw_staging import (
+    RawStagingError,
+    RawStagingService,
+    format_raw_staging_report_summary,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,18 +72,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     import_local_csv = subparsers.add_parser(
         "import-local-csv",
-        help="Placeholder local CSV import command for PR01.",
+        help="Import a local CSV or gzip CSV feed into raw staging tables.",
     )
-    import_local_csv.add_argument("--advertiser", required=True, type=int)
-    import_local_csv.add_argument("--feed-id", required=True, type=int)
+    import_local_csv.add_argument("--advertiser", required=True)
+    import_local_csv.add_argument("--feed-id", required=True)
     import_local_csv.add_argument("--path", required=True, type=Path)
     import_local_csv.add_argument("--dry-run", action="store_true")
 
     import_feeds = subparsers.add_parser(
         "import-feeds",
-        help="Placeholder remote feed import command for later PRs.",
+        help="Import a remote feed or run a placeholder remote command for later PRs.",
     )
     import_feeds.add_argument("--network", required=True, choices=["awin"])
+    import_feeds.add_argument("--advertiser")
+    import_feeds.add_argument("--feed-id")
+    import_feeds.add_argument("--raw-stage-only", action="store_true")
     import_feeds.add_argument("--download-only", action="store_true")
     import_feeds.add_argument("--dry-run", action="store_true")
 
@@ -92,18 +100,37 @@ def run_show_config() -> int:
 
 
 def run_import_local_csv(args: argparse.Namespace) -> int:
-    print(
-        "PR01 placeholder only: import-local-csv parsed successfully for "
-        f"advertiser={args.advertiser}, feed_id={args.feed_id}, path={args.path}, "
-        f"dry_run={args.dry_run}. No CSV parsing, Awin access, or database write was performed."
+    settings = get_settings()
+    report, report_path = RawStagingService(settings).import_local_csv(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        path=args.path,
+        dry_run=args.dry_run,
     )
+    print(format_raw_staging_report_summary(report, report_path))
     return 0
 
 
 def run_import_feeds(args: argparse.Namespace) -> int:
+    if args.raw_stage_only:
+        if not args.advertiser or not args.feed_id:
+            raise RawStagingError(
+                "--advertiser and --feed-id are required with --raw-stage-only"
+            )
+        settings = get_settings()
+        report, report_path = RawStagingService(settings).import_remote_feed(
+            network=args.network,
+            advertiser_id=str(args.advertiser),
+            feed_id=str(args.feed_id),
+            dry_run=args.dry_run,
+        )
+        print(format_raw_staging_report_summary(report, report_path))
+        return 0
+
     print(
         "Placeholder only: import-feeds parsed successfully for "
-        f"network={args.network}, download_only={args.download_only}, dry_run={args.dry_run}. "
+        f"network={args.network}, raw_stage_only={args.raw_stage_only}, "
+        f"download_only={args.download_only}, dry_run={args.dry_run}. "
         "No Awin request or database write was performed."
     )
     return 0
@@ -183,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             return run_import_local_csv(args)
         if args.command == "import-feeds":
             return run_import_feeds(args)
-    except (AwinCommandError, DbCommandError) as exc:
+    except (AwinCommandError, DbCommandError, RawStagingError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

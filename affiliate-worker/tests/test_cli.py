@@ -35,7 +35,7 @@ def test_show_config_masks_secrets(monkeypatch, capsys, tmp_path: Path) -> None:
     assert '"awin_product_feed_api_key_configured": true' in captured.out
 
 
-def test_import_local_csv_placeholder(monkeypatch, capsys, tmp_path: Path) -> None:
+def test_import_local_csv_requires_database_url(monkeypatch, capsys, tmp_path: Path) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     clear_settings_cache()
@@ -55,9 +55,8 @@ def test_import_local_csv_placeholder(monkeypatch, capsys, tmp_path: Path) -> No
     )
 
     captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "PR01 placeholder only" in captured.out
-    assert "No CSV parsing" in captured.out
+    assert exit_code == 1
+    assert "DATABASE_URL" in captured.err
 
 
 def test_import_feeds_placeholder(monkeypatch, capsys, tmp_path: Path) -> None:
@@ -70,6 +69,39 @@ def test_import_feeds_placeholder(monkeypatch, capsys, tmp_path: Path) -> None:
     assert "Placeholder only" in captured.out
     assert "download_only=True" in captured.out
     assert "No Awin request or database write was performed." in captured.out
+
+
+def test_import_feeds_raw_stage_only_requires_database_url(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    isolate_settings(monkeypatch, tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv(
+        "AWIN_FEED_URL_105475_97867",
+        "https://productdata.awin.com/datafeed/download/apikey/super-secret/fid/97867",
+    )
+    clear_settings_cache()
+
+    exit_code = main(
+        [
+            "import-feeds",
+            "--network",
+            "awin",
+            "--raw-stage-only",
+            "--advertiser",
+            "105475",
+            "--feed-id",
+            "97867",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "DATABASE_URL" in captured.err
+    assert "super-secret" not in captured.err
 
 
 def test_awin_list_feeds_missing_credentials(monkeypatch, capsys, tmp_path: Path) -> None:

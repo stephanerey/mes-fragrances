@@ -29,9 +29,16 @@ Implemented in PR04:
 - SQL migration tracking through `affiliate_schema_migrations`;
 - isolated affiliate tables and Comas advertiser/feed seed data.
 
+Implemented in PR05:
+
+- raw staging import from local CSV/gzip files;
+- raw staging import from configured Awin Create-a-Feed URLs;
+- `feed_import_runs` creation for non-dry-run imports;
+- `raw_feed_items` persistence with canonical `raw_hash` deduplication;
+- source payload SHA256 calculation and import reports under `/data/reports`.
+
 Not implemented yet:
 
-- row-level CSV import into the database;
 - offer import, matching or upsert logic;
 - product variants;
 - CIS front-end integration.
@@ -64,7 +71,9 @@ python -m app.main migrate-db --plan
 python -m app.main migrate-db --dry-run
 python -m app.main migrate-db
 python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
-python -m app.main import-feeds --network awin --download-only --dry-run
+python -m app.main import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv
+python -m app.main import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867 --dry-run
+python -m app.main import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867
 pytest
 ruff check .
 ```
@@ -84,6 +93,15 @@ For PR04, `inspect-db` and `migrate-db` require `DATABASE_URL`.
 `migrate-db --plan` and `migrate-db --dry-run` are non-mutating. `migrate-db` applies only pending SQL files and writes a JSON report.
 
 PR04 keeps the new affiliate schema additive-only. It references the existing `perfumes(id)` table only where the live schema is already confirmed, and it defers `product_variants` to a later PR.
+
+For PR05, `import-local-csv` and `import-feeds --raw-stage-only` require `DATABASE_URL`.
+Dry-run parses the full CSV or gzip CSV, validates the seeded advertiser/feed,
+computes the source SHA256, and writes a JSON report without inserting
+`feed_import_runs` or `raw_feed_items`.
+
+Non-dry-run import creates one `feed_import_runs` row and stores every CSV row as
+JSON in `raw_feed_items.raw_payload`. Duplicate rows are ignored safely through
+`ON CONFLICT DO NOTHING`, and the report includes duplicate counts.
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
 
@@ -132,6 +150,9 @@ docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-work
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker awin-list-feeds --dry-run
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker awin-download-feed --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker preprocess-feed --advertiser 105475 --feed-id 97867
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867 --dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867
 ```
 
 The container exposes no ports and uses `/data/feeds`, `/data/reports`, and `/data/logs`.
