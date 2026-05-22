@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import os
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -29,29 +31,190 @@ from app.raw_staging import RawStagingService
 
 TEST_DATABASE_URL = os.getenv("AFFILIATE_TEST_DATABASE_URL")
 
-SAMPLE_CSV = (
-    "aw_product_id,merchant_product_id,product_name,description,category_name,"
-    "merchant_category,search_price,display_price,store_price,currency,merchant_image_url,"
-    "large_image,aw_image_url,merchant_thumb_url,aw_deep_link,merchant_deep_link,"
-    "brand_name,ean,product_GTIN,upc,mpn,in_stock,stock_quantity,stock_status,"
-    "delivery_cost,data_feed_id,merchant_name,merchant_id,category_id,product_type,keywords,specifications\n"
-    "1,sku-1,Lancome La Vie Est Belle Eau de Parfum 50 ml,Floral &amp; gourmand,"
-    "Fragrance,Fragrance,79.90,\"79,90\",,eur,https://merchant.test/image-1.jpg,"
-    "https://merchant.test/large-1.jpg,,,,https://awin.test/1,"
-    "https://merchant.test/1,Lancome,111,111,,,1,7,in stock,0,97867,Comas,"
-    "105475,12,Perfume,floral fragrance,spray\n"
-    "2,sku-2,Dior - Sauvage Coffret EDT 2 x 50 ml,Gift set,Fragrance,Fragrance,,"
-    "\"129,99\",,EUR,https://merchant.test/image-2.jpg,,,,,https://merchant.test/2,"
-    "Dior,,222,998877665544,,1,3,in stock,5.00,97867,Comas,105475,12,Perfume,"
-    "coffret edt,gift box\n"
-    "3,sku-3,Chanel Coco Mademoiselle Body Lotion 200 ml,Body lotion,Fragrance,"
-    "Fragrance,55.00,55.00,,,https://merchant.test/image-3.jpg,,,,"
-    "https://awin.test/3,, ,,,,0,0,out of stock,,97867,Comas,105475,12,"
-    "Body Care,body lotion,lotion\n"
-    "4,sku-4,Diptyque Candle 190 g,Home candle,Home,Home,45.00,45.00,,EUR,"
-    "https://merchant.test/image-4.jpg,,,,https://awin.test/4,,Diptyque,,,,"
-    "CANDLE-190,1,8,in stock,7.00,97867,Comas,105475,99,Home,candle,wax candle\n"
-)
+SAMPLE_HEADERS = [
+    "aw_product_id",
+    "merchant_product_id",
+    "product_name",
+    "description",
+    "category_name",
+    "merchant_category",
+    "search_price",
+    "display_price",
+    "store_price",
+    "currency",
+    "merchant_image_url",
+    "large_image",
+    "aw_image_url",
+    "merchant_thumb_url",
+    "aw_deep_link",
+    "merchant_deep_link",
+    "brand_name",
+    "ean",
+    "product_GTIN",
+    "upc",
+    "mpn",
+    "in_stock",
+    "stock_quantity",
+    "stock_status",
+    "delivery_cost",
+    "data_feed_id",
+    "merchant_name",
+    "merchant_id",
+    "category_id",
+    "product_type",
+    "keywords",
+    "specifications",
+]
+
+SAMPLE_ROWS = [
+    {
+        "aw_product_id": "1",
+        "merchant_product_id": "sku-1",
+        "product_name": "Lancome La Vie Est Belle Eau de Parfum 50 ml",
+        "description": "Floral &amp; gourmand",
+        "category_name": "Fragrance",
+        "merchant_category": "Fragrance",
+        "search_price": "79.90",
+        "display_price": "79,90",
+        "store_price": "",
+        "currency": "eur",
+        "merchant_image_url": "https://merchant.test/image-1.jpg",
+        "large_image": "https://merchant.test/large-1.jpg",
+        "aw_image_url": "",
+        "merchant_thumb_url": "",
+        "aw_deep_link": "https://awin.test/1",
+        "merchant_deep_link": "https://merchant.test/1",
+        "brand_name": "Lancome",
+        "ean": "111",
+        "product_GTIN": "111",
+        "upc": "",
+        "mpn": "",
+        "in_stock": "1",
+        "stock_quantity": "7",
+        "stock_status": "in stock",
+        "delivery_cost": "0",
+        "data_feed_id": "97867",
+        "merchant_name": "Comas",
+        "merchant_id": "105475",
+        "category_id": "12",
+        "product_type": "Perfume",
+        "keywords": "floral fragrance",
+        "specifications": "spray",
+    },
+    {
+        "aw_product_id": "2",
+        "merchant_product_id": "sku-2",
+        "product_name": "Dior - Sauvage Coffret EDT 2 x 50 ml",
+        "description": "Gift set",
+        "category_name": "Fragrance",
+        "merchant_category": "Fragrance",
+        "search_price": "",
+        "display_price": "129,99",
+        "store_price": "",
+        "currency": "EUR",
+        "merchant_image_url": "https://merchant.test/image-2.jpg",
+        "large_image": "",
+        "aw_image_url": "",
+        "merchant_thumb_url": "",
+        "aw_deep_link": "",
+        "merchant_deep_link": "https://merchant.test/2",
+        "brand_name": "Dior",
+        "ean": "",
+        "product_GTIN": "",
+        "upc": "998877665544",
+        "mpn": "",
+        "in_stock": "1",
+        "stock_quantity": "3",
+        "stock_status": "in stock",
+        "delivery_cost": "5.00",
+        "data_feed_id": "97867",
+        "merchant_name": "Comas",
+        "merchant_id": "105475",
+        "category_id": "12",
+        "product_type": "Perfume",
+        "keywords": "coffret edt",
+        "specifications": "gift box",
+    },
+    {
+        "aw_product_id": "3",
+        "merchant_product_id": "sku-3",
+        "product_name": "Chanel Coco Mademoiselle Body Lotion 200 ml",
+        "description": "Body lotion",
+        "category_name": "Fragrance",
+        "merchant_category": "Fragrance",
+        "search_price": "55.00",
+        "display_price": "55.00",
+        "store_price": "",
+        "currency": "",
+        "merchant_image_url": "https://merchant.test/image-3.jpg",
+        "large_image": "",
+        "aw_image_url": "",
+        "merchant_thumb_url": "",
+        "aw_deep_link": "https://awin.test/3",
+        "merchant_deep_link": "",
+        "brand_name": "",
+        "ean": "",
+        "product_GTIN": "",
+        "upc": "",
+        "mpn": "",
+        "in_stock": "0",
+        "stock_quantity": "0",
+        "stock_status": "out of stock",
+        "delivery_cost": "",
+        "data_feed_id": "97867",
+        "merchant_name": "Comas",
+        "merchant_id": "105475",
+        "category_id": "12",
+        "product_type": "Body Care",
+        "keywords": "body lotion",
+        "specifications": "lotion",
+    },
+    {
+        "aw_product_id": "4",
+        "merchant_product_id": "sku-4",
+        "product_name": "Diptyque Candle 190 g",
+        "description": "Home candle",
+        "category_name": "Home",
+        "merchant_category": "Home",
+        "search_price": "45.00",
+        "display_price": "45.00",
+        "store_price": "",
+        "currency": "EUR",
+        "merchant_image_url": "https://merchant.test/image-4.jpg",
+        "large_image": "",
+        "aw_image_url": "",
+        "merchant_thumb_url": "",
+        "aw_deep_link": "https://awin.test/4",
+        "merchant_deep_link": "",
+        "brand_name": "Diptyque",
+        "ean": "",
+        "product_GTIN": "",
+        "upc": "",
+        "mpn": "CANDLE-190",
+        "in_stock": "1",
+        "stock_quantity": "8",
+        "stock_status": "in stock",
+        "delivery_cost": "7.00",
+        "data_feed_id": "97867",
+        "merchant_name": "Comas",
+        "merchant_id": "105475",
+        "category_id": "99",
+        "product_type": "Home",
+        "keywords": "candle",
+        "specifications": "wax candle",
+    },
+]
+
+
+def build_sample_csv() -> str:
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=SAMPLE_HEADERS)
+    writer.writeheader()
+    writer.writerows(SAMPLE_ROWS)
+    return buffer.getvalue()
+
+
+SAMPLE_CSV = build_sample_csv()
 
 
 def build_settings(tmp_path: Path, database_url: str) -> Settings:
@@ -251,7 +414,7 @@ def test_normalize_feed_dry_run_does_not_insert_rows(
     assert report["rows_excluded_body_product"] == 1
     assert report["rows_excluded_home_fragrance"] == 1
     assert report["rows_with_brand"] == 3
-    assert report["rows_with_any_identifier"] == 2
+    assert report["rows_with_any_identifier"] == 3
     assert report["rows_with_volume_ml"] == 3
     assert report["rows_with_concentration"] == 2
     assert report["rows_with_price"] == 4
