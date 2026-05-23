@@ -6,6 +6,11 @@ import sys
 from pathlib import Path
 
 from app.awin import AwinCommandError, AwinService, format_report_summary
+from app.candidates import (
+    CandidateError,
+    CandidateService,
+    format_candidate_report_summary,
+)
 from app.config import get_settings
 from app.db import (
     DatabaseService,
@@ -89,6 +94,18 @@ def build_parser() -> argparse.ArgumentParser:
     match_offers.add_argument("--min-score", type=int)
     match_offers.add_argument("--disable-fuzzy", action="store_true")
     match_offers.add_argument("--no-stale-update", action="store_true")
+
+    create_candidates = subparsers.add_parser(
+        "create-candidates",
+        help="Create or update reviewable product candidates from normalized feed rows.",
+    )
+    create_candidates.add_argument("--advertiser", required=True)
+    create_candidates.add_argument("--feed-id", required=True)
+    create_candidates.add_argument("--dry-run", action="store_true")
+    create_candidates.add_argument("--limit", type=int)
+    create_candidates.add_argument("--include-excluded", action="store_true")
+    create_candidates.add_argument("--disable-fuzzy", action="store_true")
+    create_candidates.add_argument("--min-review-score", type=int)
 
     subparsers.add_parser(
         "inspect-db",
@@ -229,6 +246,21 @@ def run_match_offers(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_create_candidates(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = CandidateService(settings).create_candidates(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        dry_run=args.dry_run,
+        limit=args.limit,
+        include_excluded=args.include_excluded,
+        disable_fuzzy=args.disable_fuzzy,
+        min_review_score=args.min_review_score,
+    )
+    print(format_candidate_report_summary(report, report_path))
+    return 0
+
+
 def run_inspect_db() -> int:
     settings = get_settings()
     report, report_path = DatabaseService(settings).inspect_db()
@@ -266,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_normalize_feed(args)
         if args.command == "match-offers":
             return run_match_offers(args)
+        if args.command == "create-candidates":
+            return run_create_candidates(args)
         if args.command == "inspect-db":
             return run_inspect_db()
         if args.command == "migrate-db":
@@ -280,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
         RawStagingError,
         NormalizationError,
         MatchingError,
+        CandidateError,
     ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

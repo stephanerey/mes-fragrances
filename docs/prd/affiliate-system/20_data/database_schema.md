@@ -257,6 +257,7 @@ CREATE TABLE product_match_candidates (
     id BIGSERIAL PRIMARY KEY,
     advertiser_id BIGINT NOT NULL REFERENCES advertisers(id) ON DELETE CASCADE,
     raw_feed_item_id BIGINT REFERENCES raw_feed_items(id) ON DELETE SET NULL,
+    dedupe_key TEXT,
     candidate_brand TEXT,
     candidate_name TEXT NOT NULL,
     candidate_concentration TEXT,
@@ -264,8 +265,7 @@ CREATE TABLE product_match_candidates (
     candidate_category TEXT,
     candidate_image_url TEXT,
     candidate_url TEXT,
-    proposed_product_id BIGINT REFERENCES products(id) ON DELETE SET NULL,
-    proposed_variant_id BIGINT REFERENCES product_variants(id) ON DELETE SET NULL,
+    proposed_perfume_id UUID REFERENCES perfumes(id) ON DELETE SET NULL,
     match_score NUMERIC(5, 2),
     match_reason TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -275,6 +275,10 @@ CREATE TABLE product_match_candidates (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX idx_product_match_candidates_advertiser_dedupe
+    ON product_match_candidates(advertiser_id, dedupe_key)
+    WHERE dedupe_key IS NOT NULL;
 ```
 
 ## affiliate_clicks — future phase

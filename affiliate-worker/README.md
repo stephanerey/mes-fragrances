@@ -58,11 +58,20 @@ Implemented in PR07:
 - JSON matching reports without touching `perfume_offers`, candidates, mappings
   or catalog tables.
 
+Implemented in PR08:
+
+- `create-candidates` command for unmatched and needs-review normalized rows;
+- candidate deduplication through `product_match_candidates.dedupe_key`;
+- preservation of manual final candidate statuses;
+- candidate enrichment payloads for later manual review;
+- excluded-row handling for commercially useful sets/refills and optional
+  rejected/ignored excluded rows.
+
 Not implemented yet:
 
 - product variants;
 - CIS front-end integration.
-- product candidates/manual review workflow.
+- admin/manual review UI.
 
 ## Local setup
 
@@ -91,6 +100,8 @@ python -m app.main normalize-feed --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main normalize-feed --advertiser 105475 --feed-id 97867
 python -m app.main match-offers --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main match-offers --advertiser 105475 --feed-id 97867
+python -m app.main create-candidates --advertiser 105475 --feed-id 97867 --dry-run
+python -m app.main create-candidates --advertiser 105475 --feed-id 97867
 python -m app.main inspect-db
 python -m app.main migrate-db --plan
 python -m app.main migrate-db --dry-run
@@ -141,6 +152,13 @@ fields, deterministic brand/name keys, then guarded fuzzy matching.
 Only confident matches create or update affiliate `offers`; excluded rows,
 ambiguous rows, review rows and unmatched rows do not create offers.
 `match-offers --dry-run` never mutates `offers`.
+
+For PR08, `create-candidates` reuses the PR07 matching rules without touching
+affiliate `offers`. It creates or updates `product_match_candidates` for
+`needs_review` and `unmatched` rows, preserves manually final statuses such as
+`accepted_existing_perfume` / `rejected_duplicate` / `ignored`, and can
+optionally include excluded rows as `needs_review`, `rejected_not_perfume`, or
+`ignored` candidates depending on the exclusion reason.
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
 
@@ -193,6 +211,8 @@ docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-work
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker normalize-feed --advertiser 105475 --feed-id 97867
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker match-offers --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker match-offers --advertiser 105475 --feed-id 97867
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker create-candidates --advertiser 105475 --feed-id 97867 --dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker create-candidates --advertiser 105475 --feed-id 97867
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867

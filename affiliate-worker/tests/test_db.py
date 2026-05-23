@@ -198,12 +198,12 @@ def test_migrate_db_is_idempotent_and_seeds_comas(
 
     dry_run_report, _ = service.migrate_db(dry_run=True)
     assert dry_run_report["status"] == "success"
-    assert dry_run_report["pending_count"] == 3
+    assert dry_run_report["pending_count"] == 4
     assert dry_run_report["migration_tracking_table_exists"] is False
 
     first_report, _ = service.migrate_db()
     assert first_report["status"] == "success"
-    assert first_report["applied_count"] == 3
+    assert first_report["applied_count"] == 4
     assert all(first_report["affiliate_tables_exist"].values())
 
     second_report, _ = service.migrate_db()
@@ -247,6 +247,15 @@ def test_migrate_db_is_idempotent_and_seeds_comas(
             order by indexname
             """
         ).fetchall()
+        candidate_indexes = conn.execute(
+            """
+            select indexname
+            from pg_indexes
+            where schemaname = 'public'
+              and tablename = 'product_match_candidates'
+            order by indexname
+            """
+        ).fetchall()
         existing_tables = conn.execute(
             """
             select table_name
@@ -260,9 +269,12 @@ def test_migrate_db_is_idempotent_and_seeds_comas(
 
     assert advertiser_row == ("Perfumerias Comas FR", "EUR", "97867")
     assert feed_row == ("fr_FR", None, "csv")
-    assert [row[0] for row in tracking_rows] == ["0001", "0002", "0003"]
+    assert [row[0] for row in tracking_rows] == ["0001", "0002", "0003", "0004"]
     assert "idx_raw_feed_items_advertiser_raw_hash" in [row[0] for row in raw_feed_item_indexes]
     assert "idx_normalized_feed_items_normalized_title" in [
         row[0] for row in normalized_feed_item_indexes
+    ]
+    assert "idx_product_match_candidates_advertiser_dedupe" in [
+        row[0] for row in candidate_indexes
     ]
     assert [row[0] for row in existing_tables] == sorted([*AFFILIATE_TABLES, TRACKING_TABLE])

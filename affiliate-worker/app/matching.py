@@ -90,6 +90,7 @@ class MatchResult:
 class LoadedNormalizedItem:
     id: int
     raw_feed_item_id: int
+    raw_hash: str
     import_run_id: int
     advertiser_id: int
     feed_id: int
@@ -553,6 +554,7 @@ class MatchingService:
             select
                 nfi.*,
                 rfi.import_run_id,
+                rfi.raw_hash,
                 rfi.raw_payload
             from normalized_feed_items nfi
             join raw_feed_items rfi
@@ -575,6 +577,7 @@ class MatchingService:
                 LoadedNormalizedItem(
                     id=int(row["id"]),
                     raw_feed_item_id=int(row["raw_feed_item_id"]),
+                    raw_hash=str(row["raw_hash"]),
                     import_run_id=int(row["import_run_id"]),
                     advertiser_id=int(row["advertiser_id"]),
                     feed_id=int(row["feed_id"]),
