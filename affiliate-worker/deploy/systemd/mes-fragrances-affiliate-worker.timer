@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Mes Fragrances affiliate worker pipeline
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=mes-fragrances-affiliate-worker.service
+
+[Install]
+WantedBy=timers.target

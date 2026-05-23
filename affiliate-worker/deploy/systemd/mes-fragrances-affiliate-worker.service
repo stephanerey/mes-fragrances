@@ -1,0 +1,14 @@
+[Unit]
+Description=Mes Fragrances affiliate worker pipeline
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eva/mes-fragrances
+ExecStart=/usr/bin/docker run --rm --network mes-fragrances_cis_default --env-file /home/eva/mes-fragrances/affiliate-worker/.env -v /home/eva/mes-fragrances/affiliate-worker-data:/data mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
