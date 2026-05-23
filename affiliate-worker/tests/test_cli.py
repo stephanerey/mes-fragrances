@@ -244,6 +244,22 @@ def test_create_candidates_requires_database_url(monkeypatch, capsys, tmp_path: 
     assert "DATABASE_URL" in captured.err
 
 
+def test_run_affiliate_pipeline_requires_database_url(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    isolate_settings(monkeypatch, tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    clear_settings_cache()
+
+    exit_code = main(["run-affiliate-pipeline", "--network", "awin", "--dry-run"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "DATABASE_URL" in captured.err
+
+
 def test_inspect_db_requires_database_url(monkeypatch, capsys, tmp_path: Path) -> None:
     isolate_settings(monkeypatch, tmp_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)

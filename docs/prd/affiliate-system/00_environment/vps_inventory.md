@@ -10,6 +10,7 @@ This file must be filled by Codex before implementing deployment-sensitive work.
 | Repository role | canonical implementation repository |
 | VPS project path | `/home/eva/mes-fragrances` |
 | Current CIS path on VPS | `/home/eva/mes-fragrances_CIS` |
+| Affiliate worker data path | `/home/eva/mes-fragrances/affiliate-worker-data` |
 | Git remote configured on VPS | `origin git@github.com:stephanerey/mes-fragrances.git` |
 | Deployment user | `eva` |
 | Ubuntu version | `Ubuntu 25.04` |
@@ -66,6 +67,19 @@ This file must be filled by Codex before implementing deployment-sensitive work.
 | Awin publisher id configured | `yes` |
 | Awin API token configured | `yes` |
 | Awin product feed key configured | `yes` |
+
+## Operations / scheduler
+
+| Field | Value |
+|---|---|
+| Recommended scheduler | `systemd timer on host` |
+| Recommended systemd service path | `/etc/systemd/system/mes-fragrances-affiliate-worker.service` |
+| Recommended systemd timer path | `/etc/systemd/system/mes-fragrances-affiliate-worker.timer` |
+| Recommended daily time | `04:20 UTC` |
+| Timer randomized delay | `15m` |
+| Latest aggregate report path | `/home/eva/mes-fragrances/affiliate-worker-data/reports/latest_affiliate_pipeline_report.json` |
+| Aggregate report directory | `/home/eva/mes-fragrances/affiliate-worker-data/reports` |
+| Current worker run pattern | `docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker <command>` |
 
 ## Runtime checks
 

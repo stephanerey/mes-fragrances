@@ -29,6 +29,7 @@ from app.normalization import (
     NormalizationService,
     format_normalization_report_summary,
 )
+from app.pipeline import PipelineService, format_pipeline_report_summary
 from app.preprocessing import FeedPreprocessor, format_preprocess_report_summary
 from app.raw_staging import (
     RawStagingError,
@@ -106,6 +107,18 @@ def build_parser() -> argparse.ArgumentParser:
     create_candidates.add_argument("--include-excluded", action="store_true")
     create_candidates.add_argument("--disable-fuzzy", action="store_true")
     create_candidates.add_argument("--min-review-score", type=int)
+
+    run_pipeline = subparsers.add_parser(
+        "run-affiliate-pipeline",
+        help="Run the full affiliate pipeline for active feeds with aggregate reporting.",
+    )
+    run_pipeline.add_argument("--network", required=True, choices=["awin"])
+    run_pipeline.add_argument("--advertiser")
+    run_pipeline.add_argument("--feed-id")
+    run_pipeline.add_argument("--dry-run", action="store_true")
+    run_pipeline.add_argument("--random-delay-max-seconds", type=int, default=0)
+    run_pipeline.add_argument("--skip-candidates", action="store_true")
+    run_pipeline.add_argument("--no-stale-update", action="store_true")
 
     subparsers.add_parser(
         "inspect-db",
@@ -261,6 +274,25 @@ def run_create_candidates(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_affiliate_pipeline(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    result = PipelineService(settings).run_pipeline(
+        network=args.network,
+        dry_run=args.dry_run,
+        advertiser_id=str(args.advertiser) if args.advertiser is not None else None,
+        feed_id=str(args.feed_id) if args.feed_id is not None else None,
+        random_delay_max_seconds=args.random_delay_max_seconds,
+        skip_candidates=args.skip_candidates,
+        no_stale_update=args.no_stale_update,
+    )
+    output = format_pipeline_report_summary(result.report, result.report_path)
+    if result.exit_code == 1:
+        print(output, file=sys.stderr)
+    else:
+        print(output)
+    return result.exit_code
+
+
 def run_inspect_db() -> int:
     settings = get_settings()
     report, report_path = DatabaseService(settings).inspect_db()
@@ -300,6 +332,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_match_offers(args)
         if args.command == "create-candidates":
             return run_create_candidates(args)
+        if args.command == "run-affiliate-pipeline":
+            return run_affiliate_pipeline(args)
         if args.command == "inspect-db":
             return run_inspect_db()
         if args.command == "migrate-db":
