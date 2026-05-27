@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import os
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from uuid import uuid4
@@ -354,6 +355,70 @@ def prepare_candidate_database(
     return settings, TEST_DATABASE_URL
 
 
+def create_perfume_insert_candidates_table(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            """
+            create table if not exists perfume_insert_candidates (
+                id bigserial primary key,
+                source_candidate_id bigint,
+                source_offer_id bigint,
+                candidate_brand text,
+                candidate_name text not null,
+                candidate_concentration text,
+                candidate_volume_ml numeric(8, 2),
+                candidate_category text,
+                candidate_ean text,
+                candidate_gtin text,
+                candidate_upc text,
+                candidate_mpn text,
+                candidate_image_url text,
+                candidate_source_title text,
+                candidate_affiliate_url text,
+                classification text not null,
+                confidence numeric(5, 4),
+                duplicate_risk text,
+                duplicate_reason text,
+                nearest_perfume_id uuid references perfumes(id) on delete set null,
+                nearest_perfume_brand text,
+                nearest_perfume_name text,
+                review_status text not null default 'pending',
+                review_notes text,
+                reviewed_at timestamptz,
+                reviewed_by text,
+                first_seen_at timestamptz not null default now(),
+                last_seen_at timestamptz not null default now(),
+                seen_count integer not null default 1,
+                promoted_at timestamptz,
+                promoted_perfume_id uuid references perfumes(id) on delete set null,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now()
+            )
+            """
+        )
+        conn.execute(
+            """
+            create unique index if not exists idx_perfume_insert_candidates_source_candidate
+            on perfume_insert_candidates(source_candidate_id)
+            where source_candidate_id is not null
+            """
+        )
+
+
+def advertiser_db_id(database_url: str, advertiser_id: str = "105475") -> int:
+    with psycopg.connect(database_url) as conn:
+        return int(
+            conn.execute(
+                """
+                select id
+                from advertisers
+                where network = 'awin' and network_advertiser_id = %s
+                """,
+                (advertiser_id,),
+            ).fetchone()[0]
+        )
+
+
 def test_unmatched_fragrance_creates_candidate(tmp_path: Path) -> None:
     settings, database_url = prepare_candidate_database(tmp_path)
 
@@ -677,3 +742,308 @@ def test_generic_advertiser_feed_parameters_are_supported(tmp_path: Path) -> Non
 
     assert report["advertiser_id"] == "555"
     assert candidate == (advertiser_id, "Acme Secret Bloom 50 ml")
+
+
+def test_sync_insert_candidates_creates_safe_candidate_and_tracking_fields(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    create_perfume_insert_candidates_table(database_url)
+    CandidateService(settings).create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+
+    report, report_path = CandidateService(settings).sync_perfume_insert_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select classification, review_status, seen_count, first_seen_at, last_seen_at
+            from perfume_insert_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+
+    assert report["status"] == "success"
+    assert report["staging_inserted"] >= 1
+    assert report_path.exists()
+    assert row[0] == "SAFE_INSERT_CANDIDATE"
+    assert row[1] == "pending"
+    assert row[2] == 1
+    assert row[3] is not None
+    assert row[4] is not None
+
+
+def test_sync_insert_candidates_preserves_manual_review_status(tmp_path: Path) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    create_perfume_insert_candidates_table(database_url)
+    service = CandidateService(settings)
+    service.create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        candidate = conn.execute(
+            """
+            select id
+            from product_match_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+        conn.execute(
+            """
+            insert into perfume_insert_candidates (
+                source_candidate_id,
+                candidate_brand,
+                candidate_name,
+                classification,
+                review_status,
+                seen_count
+            )
+            values (%s, 'Acme', 'Curated Name', 'NEEDS_MANUAL_REVIEW', 'approved', 4)
+            """,
+            (candidate[0],),
+        )
+
+    report, _ = service.sync_perfume_insert_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select candidate_name, classification, review_status, seen_count
+            from perfume_insert_candidates
+            where source_candidate_id = (
+                select id
+                from product_match_candidates
+                where candidate_name = 'Acme Secret Bloom 50 ml'
+            )
+            """
+        ).fetchone()
+
+    assert report["staging_ignored_manual_status"] >= 1
+    assert row == ("Curated Name", "NEEDS_MANUAL_REVIEW", "approved", 5)
+
+
+def test_sync_insert_candidates_increments_seen_count_for_pending_rows(tmp_path: Path) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    create_perfume_insert_candidates_table(database_url)
+    service = CandidateService(settings)
+    service.create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+
+    previous_time = datetime.now(timezone.utc) - timedelta(days=2)
+    with psycopg.connect(database_url) as conn:
+        candidate = conn.execute(
+            """
+            select id
+            from product_match_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+        conn.execute(
+            """
+            insert into perfume_insert_candidates (
+                source_candidate_id,
+                candidate_brand,
+                candidate_name,
+                classification,
+                review_status,
+                seen_count,
+                first_seen_at,
+                last_seen_at
+            )
+            values (
+                %s,
+                'Acme',
+                'Acme Secret Bloom 50 ml',
+                'NEEDS_MANUAL_REVIEW',
+                'pending',
+                2,
+                %s,
+                %s
+            )
+            """,
+            (candidate[0], previous_time, previous_time),
+        )
+
+    report, _ = service.sync_perfume_insert_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select classification, seen_count, first_seen_at, last_seen_at
+            from perfume_insert_candidates
+            where source_candidate_id = (
+                select id
+                from product_match_candidates
+                where candidate_name = 'Acme Secret Bloom 50 ml'
+            )
+            """
+        ).fetchone()
+
+    assert report["staging_updated"] >= 1
+    assert report["staging_pending_refreshed"] >= 1
+    assert row[0] == "SAFE_INSERT_CANDIDATE"
+    assert row[1] == 3
+    assert row[2] == previous_time
+    assert row[3] > previous_time
+
+
+def test_sync_insert_candidates_dry_run_does_not_write_staging_table(tmp_path: Path) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    create_perfume_insert_candidates_table(database_url)
+    CandidateService(settings).create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+
+    report, _ = CandidateService(settings).sync_perfume_insert_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        count = conn.execute(
+            "select count(*) from perfume_insert_candidates"
+        ).fetchone()[0]
+
+    assert report["staging_inserted"] >= 1
+    assert count == 0
+
+
+def test_sync_insert_candidates_classifies_non_perfume_and_ignores_promoted(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    create_perfume_insert_candidates_table(database_url)
+    advertiser_id_value = advertiser_db_id(database_url)
+    service = CandidateService(settings)
+
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            """
+            insert into product_match_candidates (
+                advertiser_id,
+                candidate_brand,
+                candidate_name,
+                candidate_category,
+                candidate_url,
+                status,
+                enrichment_payload,
+                dedupe_key
+            )
+            values (
+                %s,
+                'Acme',
+                'Acme Home Fragrance Candle 100 ml',
+                'Home fragrance',
+                'https://merchant.test/home',
+                'pending',
+                '{"network_feed_id": "97867", "title": "Acme Home Fragrance Candle 100 ml"}'::jsonb,
+                'sync-home-fragrance'
+            )
+            returning id
+            """,
+            (advertiser_id_value,),
+        ).fetchone()[0]
+        promoted_source_candidate_id = conn.execute(
+            """
+            insert into product_match_candidates (
+                advertiser_id,
+                candidate_brand,
+                candidate_name,
+                candidate_url,
+                status,
+                enrichment_payload,
+                dedupe_key
+            )
+            values (
+                %s,
+                'Montale',
+                'Montale Bubble Forever 100 ml',
+                'https://merchant.test/montale',
+                'pending',
+                '{"network_feed_id": "97867", "title": "Montale Bubble Forever 100 ml"}'::jsonb,
+                'sync-promoted'
+            )
+            returning id
+            """,
+            (advertiser_id_value,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            insert into perfume_insert_candidates (
+                source_candidate_id,
+                candidate_brand,
+                candidate_name,
+                classification,
+                review_status,
+                seen_count
+            )
+            values (
+                %s,
+                'Montale',
+                'Montale Bubble Forever 100 ml',
+                'SAFE_INSERT_CANDIDATE',
+                'promoted',
+                9
+            )
+            """,
+            (promoted_source_candidate_id,),
+        )
+
+    report, _ = service.sync_perfume_insert_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        non_perfume = conn.execute(
+            """
+            select classification
+            from perfume_insert_candidates
+            where source_candidate_id = (
+                select id
+                from product_match_candidates
+                where candidate_name = 'Acme Home Fragrance Candle 100 ml'
+            )
+            """
+        ).fetchone()[0]
+        promoted = conn.execute(
+            """
+            select review_status, seen_count
+            from perfume_insert_candidates
+            where source_candidate_id = %s
+            """,
+            (promoted_source_candidate_id,),
+        ).fetchone()
+
+    assert report["staging_ignored_manual_status"] >= 1
+    assert non_perfume == "NON_PERFUME_PRODUCT"
+    assert promoted == ("promoted", 10)

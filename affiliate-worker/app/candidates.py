@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -11,11 +14,13 @@ from psycopg.types.json import Jsonb
 from app.config import Settings
 from app.db import DatabaseService
 from app.matching import (
+    CatalogPerfume,
     LoadedNormalizedItem,
     MatchingService,
     MatchResult,
     build_perfume_match_key,
 )
+from app.normalization import normalize_text
 from app.reporting import try_write_report, write_report
 
 MANUAL_FINAL_CANDIDATE_STATUSES = {
@@ -30,6 +35,40 @@ AUTO_MUTABLE_CANDIDATE_STATUSES = {"pending", "needs_review"}
 COMMERCIAL_EXCLUDED_REASONS = {"set_or_bundle", "refill"}
 REJECTED_EXCLUDED_REASONS = {"body_product", "home_fragrance"}
 IGNORED_EXCLUDED_REASONS = {"tester"}
+STAGING_MUTABLE_REVIEW_STATUSES = {"pending"}
+STAGING_FINAL_REVIEW_STATUSES = {
+    "approved",
+    "promoted",
+    "rejected",
+    "merged_existing",
+    "needs_more_info",
+}
+SAFE_INSERT_CANDIDATE = "SAFE_INSERT_CANDIDATE"
+NEEDS_MANUAL_REVIEW = "NEEDS_MANUAL_REVIEW"
+POSSIBLE_DUPLICATE = "POSSIBLE_DUPLICATE"
+VARIANT_OF_EXISTING = "VARIANT_OF_EXISTING"
+NON_PERFUME_PRODUCT = "NON_PERFUME_PRODUCT"
+NON_PERFUME_PATTERNS = (
+    "coffret",
+    "set",
+    "discovery",
+    "sample",
+    "tester",
+    "refill",
+    "recharge",
+    "bougie",
+    "candle",
+    "body",
+    "lotion",
+    "gel douche",
+    "shower gel",
+    "savon",
+    "soap",
+    "after shave",
+    "diffuseur",
+    "home parfum",
+    "home fragrance",
+)
 
 
 class CandidateError(RuntimeError):
@@ -57,6 +96,55 @@ class CandidateAggregate:
     source_count: int
 
 
+@dataclass(frozen=True)
+class InsertCandidateClassification:
+    source_candidate_id: int
+    source_offer_id: int | None
+    candidate_brand: str | None
+    candidate_name: str
+    candidate_concentration: str | None
+    candidate_volume_ml: Decimal | None
+    candidate_category: str | None
+    candidate_ean: str | None
+    candidate_gtin: str | None
+    candidate_upc: str | None
+    candidate_mpn: str | None
+    candidate_image_url: str | None
+    candidate_source_title: str | None
+    candidate_affiliate_url: str | None
+    classification: str
+    confidence: Decimal | None
+    duplicate_risk: str | None
+    duplicate_reason: str | None
+    nearest_perfume_id: str | None
+    nearest_perfume_brand: str | None
+    nearest_perfume_name: str | None
+    source_status: str
+
+    def as_csv_row(self) -> dict[str, object]:
+        return {
+            "source_candidate_id": self.source_candidate_id,
+            "candidate_brand": self.candidate_brand or "",
+            "candidate_name": self.candidate_name,
+            "candidate_concentration": self.candidate_concentration or "",
+            "candidate_volume_ml": _decimal_to_string(self.candidate_volume_ml) or "",
+            "candidate_ean": self.candidate_ean or "",
+            "candidate_gtin": self.candidate_gtin or "",
+            "candidate_upc": self.candidate_upc or "",
+            "candidate_mpn": self.candidate_mpn or "",
+            "candidate_image_url": self.candidate_image_url or "",
+            "candidate_source_title": self.candidate_source_title or "",
+            "classification": self.classification,
+            "confidence": _decimal_to_string(self.confidence) or "",
+            "duplicate_risk": self.duplicate_risk or "",
+            "duplicate_reason": self.duplicate_reason or "",
+            "nearest_perfume_id": self.nearest_perfume_id or "",
+            "nearest_perfume_brand": self.nearest_perfume_brand or "",
+            "nearest_perfume_name": self.nearest_perfume_name or "",
+            "source_status": self.source_status,
+        }
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -65,6 +153,21 @@ def _decimal_to_string(value: Decimal | None) -> str | None:
     if value is None:
         return None
     return format(value, "f")
+
+
+def _report_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _build_text_blob(*parts: str | None) -> str:
+    return " ".join(normalize_text(part) for part in parts if normalize_text(part)).strip()
+
+
+def _identifier_value(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def build_candidate_dedupe_key(item: LoadedNormalizedItem) -> str:
@@ -356,6 +459,139 @@ class CandidateService:
                 raise CandidateError(f"{message}. Report written to {report_path}") from exc
             raise CandidateError(message) from exc
 
+    def sync_perfume_insert_candidates(
+        self,
+        *,
+        advertiser_id: str,
+        feed_id: str,
+        dry_run: bool,
+        limit: int | None = None,
+        report_dir: Path | None = None,
+        only_statuses: list[str] | None = None,
+    ) -> tuple[dict[str, object], Path]:
+        self.db_service.require_database_url()
+
+        selected_statuses = only_statuses or ["pending", "needs_review"]
+        report_root = report_dir or self.settings.reports_dir
+        report_root.mkdir(parents=True, exist_ok=True)
+        report_stamp = _report_timestamp()
+        markdown_path = report_root / f"sync_perfume_insert_candidates_{report_stamp}.md"
+        safe_csv_path = (
+            report_root / f"sync_perfume_insert_candidates_safe_new_{report_stamp}.csv"
+        )
+        json_path = report_root / f"sync_perfume_insert_candidates_{report_stamp}.json"
+        report: dict[str, object] = {
+            "checked_at": _utc_now(),
+            "status": "error",
+            "command": "sync-perfume-insert-candidates",
+            "network": "awin",
+            "advertiser_id": advertiser_id,
+            "feed_id": feed_id,
+            "dry_run": dry_run,
+            "database_url_redacted": True,
+            "selection_limit": limit,
+            "only_statuses": selected_statuses,
+            "candidates_analyzed": 0,
+            "staging_inserted": 0,
+            "staging_updated": 0,
+            "staging_ignored_manual_status": 0,
+            "staging_pending_refreshed": 0,
+            "classification_counts": {},
+            "top_brands": [],
+            "safe_new_candidates_count": 0,
+            "markdown_report_path": str(markdown_path),
+            "safe_csv_path": str(safe_csv_path),
+        }
+
+        try:
+            with self.db_service.connect() as conn:
+                self._ensure_perfume_insert_candidates_table(conn)
+                advertiser_row, affiliate_feed_row = self.matching_service._resolve_feed_context(  # noqa: SLF001
+                    conn,
+                    advertiser_id=advertiser_id,
+                    feed_id=feed_id,
+                )
+                source_candidates = self._load_sync_source_candidates(
+                    conn,
+                    advertiser_db_id=int(advertiser_row["id"]),
+                    network_feed_id=str(affiliate_feed_row["network_feed_id"]),
+                    only_statuses=selected_statuses,
+                    limit=limit,
+                )
+                catalog_rows, available_catalog_columns = (
+                    self.matching_service._load_catalog_perfumes(conn)  # noqa: SLF001
+                )
+                classifications = self._classify_insert_candidates(
+                    source_candidates,
+                    catalog_rows=catalog_rows,
+                    available_catalog_columns=available_catalog_columns,
+                )
+                brand_counts = Counter(
+                    entry.candidate_brand or "<missing>" for entry in classifications
+                )
+                classification_counts = Counter(
+                    entry.classification for entry in classifications
+                )
+                report.update(
+                    {
+                        "status": "success",
+                        "candidates_analyzed": len(classifications),
+                        "classification_counts": dict(sorted(classification_counts.items())),
+                        "top_brands": [
+                            {"candidate_brand": brand, "count": count}
+                            for brand, count in brand_counts.most_common(10)
+                        ],
+                    }
+                )
+
+                if dry_run:
+                    (
+                        inserted,
+                        updated,
+                        ignored_manual,
+                        pending_refreshed,
+                        safe_candidates,
+                    ) = self._plan_insert_candidate_sync(conn, classifications=classifications)
+                    report["staging_inserted"] = inserted
+                    report["staging_updated"] = updated
+                    report["staging_ignored_manual_status"] = ignored_manual
+                    report["staging_pending_refreshed"] = pending_refreshed
+                    report["safe_new_candidates_count"] = len(safe_candidates)
+                    self._write_sync_markdown(markdown_path, report)
+                    self._write_sync_safe_csv(safe_csv_path, safe_candidates)
+                else:
+                    (
+                        inserted,
+                        updated,
+                        ignored_manual,
+                        pending_refreshed,
+                        safe_candidates,
+                    ) = self._persist_insert_candidates(conn, classifications=classifications)
+                    report["staging_inserted"] = inserted
+                    report["staging_updated"] = updated
+                    report["staging_ignored_manual_status"] = ignored_manual
+                    report["staging_pending_refreshed"] = pending_refreshed
+                    report["safe_new_candidates_count"] = len(safe_candidates)
+                    self._write_sync_markdown(markdown_path, report)
+                    self._write_sync_safe_csv(safe_csv_path, safe_candidates)
+
+            json_path.write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return report, json_path
+        except Exception as exc:
+            message = str(exc)
+            report["error"] = message
+            try:
+                json_path.write_text(
+                    json.dumps(report, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+            raise CandidateError(message) from exc
+
     def _ensure_candidate_dedupe_column(self, conn: Any) -> None:
         row = conn.execute(
             """
@@ -371,6 +607,545 @@ class CandidateService:
                 "product_match_candidates.dedupe_key is missing. "
                 "Run migrate-db from PR08 first."
             )
+
+    def _ensure_perfume_insert_candidates_table(self, conn: Any) -> None:
+        required_columns = {
+            "id",
+            "source_candidate_id",
+            "candidate_brand",
+            "candidate_name",
+            "classification",
+            "review_status",
+            "first_seen_at",
+            "last_seen_at",
+            "seen_count",
+            "promoted_at",
+            "promoted_perfume_id",
+            "updated_at",
+        }
+        rows = conn.execute(
+            """
+            select column_name
+            from information_schema.columns
+            where table_schema = 'public'
+              and table_name = 'perfume_insert_candidates'
+            """
+        ).fetchall()
+        available = {str(row["column_name"]) for row in rows}
+        missing = sorted(required_columns - available)
+        if missing:
+            raise CandidateError(
+                "public.perfume_insert_candidates is missing required columns: "
+                + ", ".join(missing)
+            )
+
+    def _load_sync_source_candidates(
+        self,
+        conn: Any,
+        *,
+        advertiser_db_id: int,
+        network_feed_id: str,
+        only_statuses: list[str],
+        limit: int | None,
+    ) -> list[dict[str, object]]:
+        sql = """
+            select *
+            from product_match_candidates
+            where advertiser_id = %s
+              and status = any(%s)
+              and coalesce(enrichment_payload ->> 'network_feed_id', '') = %s
+            order by id
+        """
+        params: list[object] = [advertiser_db_id, only_statuses, network_feed_id]
+        if limit is not None:
+            sql += " limit %s"
+            params.append(limit)
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def _classify_insert_candidates(
+        self,
+        source_candidates: list[dict[str, object]],
+        *,
+        catalog_rows: list[CatalogPerfume],
+        available_catalog_columns: set[str],
+    ) -> list[InsertCandidateClassification]:
+        catalog_by_brand: dict[str, list[CatalogPerfume]] = {}
+        identifiers_by_field: dict[str, dict[str, list[CatalogPerfume]]] = {
+            field: {} for field in ("ean", "gtin", "upc", "mpn")
+        }
+        for perfume in catalog_rows:
+            catalog_by_brand.setdefault(perfume.normalized_brand, []).append(perfume)
+            for field, value in perfume.identifiers.items():
+                identifiers_by_field[field].setdefault(value, []).append(perfume)
+
+        classifications: list[InsertCandidateClassification] = []
+        for source in source_candidates:
+            enrichment = dict(source.get("enrichment_payload") or {})
+            candidate_brand = source.get("candidate_brand")
+            candidate_name = str(source["candidate_name"])
+            candidate_concentration = source.get("candidate_concentration")
+            candidate_volume_ml = source.get("candidate_volume_ml")
+            candidate_category = source.get("candidate_category")
+            candidate_image_url = source.get("candidate_image_url")
+            candidate_affiliate_url = (
+                enrichment.get("affiliate_url") or source.get("candidate_url")
+            )
+            candidate_source_title = enrichment.get("title") or candidate_name
+            candidate_ean = _identifier_value(enrichment.get("ean"))
+            candidate_gtin = _identifier_value(enrichment.get("gtin"))
+            candidate_upc = _identifier_value(enrichment.get("upc"))
+            candidate_mpn = _identifier_value(enrichment.get("mpn"))
+            candidate_identifier_map = {
+                "ean": candidate_ean,
+                "gtin": candidate_gtin,
+                "upc": candidate_upc,
+                "mpn": candidate_mpn,
+            }
+
+            nearest_perfume: CatalogPerfume | None = None
+            duplicate_reason: str | None = None
+            duplicate_risk: str | None = None
+            classification = NEEDS_MANUAL_REVIEW
+            confidence = Decimal("0.5000")
+
+            if self._is_non_perfume_candidate(
+                candidate_name=candidate_name,
+                source_title=str(candidate_source_title) if candidate_source_title else None,
+                candidate_category=str(candidate_category) if candidate_category else None,
+            ):
+                classification = NON_PERFUME_PRODUCT
+                confidence = Decimal("0.9800")
+                duplicate_risk = "none"
+                duplicate_reason = "Detected non-perfume keywords in title or category."
+            else:
+                exact_identifier_match = self._find_identifier_duplicate(
+                    candidate_identifier_map,
+                    identifiers_by_field=identifiers_by_field,
+                )
+                if exact_identifier_match is not None:
+                    nearest_perfume = exact_identifier_match
+                    classification = POSSIBLE_DUPLICATE
+                    confidence = Decimal("0.9900")
+                    duplicate_risk = "high"
+                    duplicate_reason = "Identifier already exists in public.perfumes."
+                else:
+                    normalized_brand = normalize_text(candidate_brand)
+                    normalized_name = normalize_text(candidate_name)
+                    candidate_key = build_perfume_match_key(
+                        candidate_name,
+                        brand=str(candidate_brand) if candidate_brand else None,
+                        concentration=(
+                            str(candidate_concentration)
+                            if candidate_concentration is not None
+                            else None
+                        ),
+                        volume_ml=candidate_volume_ml,
+                    )
+                    brand_catalog = catalog_by_brand.get(normalized_brand, [])
+                    exact_name_match = next(
+                        (
+                            perfume
+                            for perfume in brand_catalog
+                            if normalize_text(perfume.name) == normalized_name
+                        ),
+                        None,
+                    )
+                    if exact_name_match is not None:
+                        nearest_perfume = exact_name_match
+                        classification = POSSIBLE_DUPLICATE
+                        confidence = Decimal("0.9700")
+                        duplicate_risk = "high"
+                        duplicate_reason = "Exact brand/name match already exists."
+                    else:
+                        key_match = next(
+                            (
+                                perfume
+                                for perfume in brand_catalog
+                                if candidate_key and perfume.match_key == candidate_key
+                            ),
+                            None,
+                        )
+                        if key_match is not None:
+                            nearest_perfume = key_match
+                            classification = VARIANT_OF_EXISTING
+                            confidence = Decimal("0.9200")
+                            duplicate_risk = "medium"
+                            duplicate_reason = (
+                                "Normalized perfume name matches an existing brand variant."
+                            )
+                        elif source.get("proposed_perfume_id") is not None:
+                            nearest_perfume = next(
+                                (
+                                    perfume
+                                    for perfume in catalog_rows
+                                    if perfume.id == str(source["proposed_perfume_id"])
+                                ),
+                                None,
+                            )
+                            classification = VARIANT_OF_EXISTING
+                            confidence = Decimal("0.8500")
+                            duplicate_risk = "medium"
+                            duplicate_reason = (
+                                "Candidate already points to an existing perfume proposal."
+                            )
+                        elif not candidate_brand or not candidate_name:
+                            classification = NEEDS_MANUAL_REVIEW
+                            confidence = Decimal("0.4000")
+                            duplicate_risk = "unknown"
+                            duplicate_reason = "Missing brand or candidate name."
+                        elif not brand_catalog:
+                            classification = SAFE_INSERT_CANDIDATE
+                            confidence = Decimal("0.9000")
+                            duplicate_risk = "low"
+                            duplicate_reason = "Brand does not exist in public.perfumes."
+                        else:
+                            classification = NEEDS_MANUAL_REVIEW
+                            confidence = Decimal("0.6500")
+                            duplicate_risk = "medium"
+                            duplicate_reason = (
+                                "Brand exists, but automated duplicate checks remain inconclusive."
+                            )
+
+            classifications.append(
+                InsertCandidateClassification(
+                    source_candidate_id=int(source["id"]),
+                    source_offer_id=None,
+                    candidate_brand=str(candidate_brand) if candidate_brand else None,
+                    candidate_name=candidate_name,
+                    candidate_concentration=(
+                        str(candidate_concentration)
+                        if candidate_concentration is not None
+                        else None
+                    ),
+                    candidate_volume_ml=candidate_volume_ml,
+                    candidate_category=str(candidate_category) if candidate_category else None,
+                    candidate_ean=candidate_ean,
+                    candidate_gtin=candidate_gtin,
+                    candidate_upc=candidate_upc,
+                    candidate_mpn=candidate_mpn,
+                    candidate_image_url=(
+                        str(candidate_image_url) if candidate_image_url else None
+                    ),
+                    candidate_source_title=(
+                        str(candidate_source_title) if candidate_source_title else None
+                    ),
+                    candidate_affiliate_url=(
+                        str(candidate_affiliate_url) if candidate_affiliate_url else None
+                    ),
+                    classification=classification,
+                    confidence=confidence,
+                    duplicate_risk=duplicate_risk,
+                    duplicate_reason=duplicate_reason,
+                    nearest_perfume_id=nearest_perfume.id if nearest_perfume else None,
+                    nearest_perfume_brand=nearest_perfume.brand if nearest_perfume else None,
+                    nearest_perfume_name=nearest_perfume.name if nearest_perfume else None,
+                    source_status=str(source["status"]),
+                )
+            )
+        return classifications
+
+    def _is_non_perfume_candidate(
+        self,
+        *,
+        candidate_name: str,
+        source_title: str | None,
+        candidate_category: str | None,
+    ) -> bool:
+        blob = _build_text_blob(candidate_name, source_title, candidate_category)
+        return any(keyword in blob for keyword in NON_PERFUME_PATTERNS)
+
+    def _find_identifier_duplicate(
+        self,
+        candidate_identifier_map: dict[str, str | None],
+        *,
+        identifiers_by_field: dict[str, dict[str, list[CatalogPerfume]]],
+    ) -> CatalogPerfume | None:
+        for field, value in candidate_identifier_map.items():
+            if not value:
+                continue
+            matches = identifiers_by_field[field].get(value, [])
+            if len(matches) == 1:
+                return matches[0]
+        return None
+
+    def _load_existing_insert_candidate(
+        self,
+        conn: Any,
+        *,
+        source_candidate_id: int,
+    ) -> dict[str, object] | None:
+        row = conn.execute(
+            """
+            select *
+            from perfume_insert_candidates
+            where source_candidate_id = %s
+            """,
+            (source_candidate_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def _persist_insert_candidates(
+        self,
+        conn: Any,
+        *,
+        classifications: list[InsertCandidateClassification],
+    ) -> tuple[int, int, int, int, list[InsertCandidateClassification]]:
+        inserted = 0
+        updated = 0
+        ignored_manual = 0
+        pending_refreshed = 0
+        safe_new_candidates: list[InsertCandidateClassification] = []
+
+        with conn.transaction():
+            for entry in classifications:
+                existing = self._load_existing_insert_candidate(
+                    conn,
+                    source_candidate_id=entry.source_candidate_id,
+                )
+                if existing is None:
+                    conn.execute(
+                        """
+                        insert into perfume_insert_candidates (
+                            source_candidate_id,
+                            source_offer_id,
+                            candidate_brand,
+                            candidate_name,
+                            candidate_concentration,
+                            candidate_volume_ml,
+                            candidate_category,
+                            candidate_ean,
+                            candidate_gtin,
+                            candidate_upc,
+                            candidate_mpn,
+                            candidate_image_url,
+                            candidate_source_title,
+                            candidate_affiliate_url,
+                            classification,
+                            confidence,
+                            duplicate_risk,
+                            duplicate_reason,
+                            nearest_perfume_id,
+                            nearest_perfume_brand,
+                            nearest_perfume_name,
+                            review_status,
+                            first_seen_at,
+                            last_seen_at,
+                            seen_count,
+                            updated_at
+                        )
+                        values (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, 'pending', now(), now(), 1, now()
+                        )
+                        """,
+                        (
+                            entry.source_candidate_id,
+                            entry.source_offer_id,
+                            entry.candidate_brand,
+                            entry.candidate_name,
+                            entry.candidate_concentration,
+                            entry.candidate_volume_ml,
+                            entry.candidate_category,
+                            entry.candidate_ean,
+                            entry.candidate_gtin,
+                            entry.candidate_upc,
+                            entry.candidate_mpn,
+                            entry.candidate_image_url,
+                            entry.candidate_source_title,
+                            entry.candidate_affiliate_url,
+                            entry.classification,
+                            entry.confidence,
+                            entry.duplicate_risk,
+                            entry.duplicate_reason,
+                            entry.nearest_perfume_id,
+                            entry.nearest_perfume_brand,
+                            entry.nearest_perfume_name,
+                        ),
+                    )
+                    inserted += 1
+                    if entry.classification == SAFE_INSERT_CANDIDATE:
+                        safe_new_candidates.append(entry)
+                    continue
+
+                review_status = str(existing["review_status"])
+                if review_status in STAGING_FINAL_REVIEW_STATUSES:
+                    conn.execute(
+                        """
+                        update perfume_insert_candidates
+                        set last_seen_at = now(),
+                            seen_count = coalesce(seen_count, 0) + 1,
+                            updated_at = now()
+                        where id = %s
+                        """,
+                        (existing["id"],),
+                    )
+                    ignored_manual += 1
+                    continue
+
+                conn.execute(
+                    """
+                    update perfume_insert_candidates
+                    set candidate_brand = %s,
+                        candidate_name = %s,
+                        candidate_concentration = %s,
+                        candidate_volume_ml = %s,
+                        candidate_category = %s,
+                        candidate_ean = %s,
+                        candidate_gtin = %s,
+                        candidate_upc = %s,
+                        candidate_mpn = %s,
+                        candidate_image_url = %s,
+                        candidate_source_title = %s,
+                        candidate_affiliate_url = %s,
+                        classification = %s,
+                        confidence = %s,
+                        duplicate_risk = %s,
+                        duplicate_reason = %s,
+                        nearest_perfume_id = %s,
+                        nearest_perfume_brand = %s,
+                        nearest_perfume_name = %s,
+                        last_seen_at = now(),
+                        seen_count = coalesce(seen_count, 0) + 1,
+                        updated_at = now()
+                    where id = %s
+                    """,
+                    (
+                        entry.candidate_brand,
+                        entry.candidate_name,
+                        entry.candidate_concentration,
+                        entry.candidate_volume_ml,
+                        entry.candidate_category,
+                        entry.candidate_ean,
+                        entry.candidate_gtin,
+                        entry.candidate_upc,
+                        entry.candidate_mpn,
+                        entry.candidate_image_url,
+                        entry.candidate_source_title,
+                        entry.candidate_affiliate_url,
+                        entry.classification,
+                        entry.confidence,
+                        entry.duplicate_risk,
+                        entry.duplicate_reason,
+                        entry.nearest_perfume_id,
+                        entry.nearest_perfume_brand,
+                        entry.nearest_perfume_name,
+                        existing["id"],
+                    ),
+                )
+                updated += 1
+                pending_refreshed += 1
+
+        return inserted, updated, ignored_manual, pending_refreshed, safe_new_candidates
+
+    def _plan_insert_candidate_sync(
+        self,
+        conn: Any,
+        *,
+        classifications: list[InsertCandidateClassification],
+    ) -> tuple[int, int, int, int, list[InsertCandidateClassification]]:
+        inserted = 0
+        updated = 0
+        ignored_manual = 0
+        pending_refreshed = 0
+        safe_new_candidates: list[InsertCandidateClassification] = []
+
+        for entry in classifications:
+            existing = self._load_existing_insert_candidate(
+                conn,
+                source_candidate_id=entry.source_candidate_id,
+            )
+            if existing is None:
+                inserted += 1
+                if entry.classification == SAFE_INSERT_CANDIDATE:
+                    safe_new_candidates.append(entry)
+                continue
+
+            review_status = str(existing["review_status"])
+            if review_status in STAGING_FINAL_REVIEW_STATUSES:
+                ignored_manual += 1
+            else:
+                updated += 1
+                pending_refreshed += 1
+
+        return inserted, updated, ignored_manual, pending_refreshed, safe_new_candidates
+
+    def _write_sync_markdown(self, markdown_path: Path, report: Mapping[str, object]) -> None:
+        lines = [
+            "# sync-perfume-insert-candidates",
+            "",
+            f"- status: `{report.get('status')}`",
+            f"- dry_run: `{report.get('dry_run')}`",
+            f"- advertiser_id: `{report.get('advertiser_id')}`",
+            f"- feed_id: `{report.get('feed_id')}`",
+            f"- candidates_analyzed: `{report.get('candidates_analyzed')}`",
+            f"- staging_inserted: `{report.get('staging_inserted')}`",
+            f"- staging_updated: `{report.get('staging_updated')}`",
+            f"- staging_ignored_manual_status: `{report.get('staging_ignored_manual_status')}`",
+            f"- safe_new_candidates_count: `{report.get('safe_new_candidates_count')}`",
+            "",
+            "## Classification counts",
+            "",
+        ]
+        classification_counts = report.get("classification_counts") or {}
+        if classification_counts:
+            for classification, count in classification_counts.items():
+                lines.append(f"- `{classification}`: `{count}`")
+        else:
+            lines.append("- none")
+        lines.extend(["", "## Top brands", ""])
+        top_brands = report.get("top_brands") or []
+        if top_brands:
+            for row in top_brands:
+                lines.append(
+                    f"- `{row.get('candidate_brand')}`: `{row.get('count')}`"
+                )
+        else:
+            lines.append("- none")
+        lines.extend(
+            [
+                "",
+                "## Safety",
+                "",
+                "- This command updates only `public.perfume_insert_candidates`.",
+                "- It never promotes candidates into `public.perfumes`.",
+                "- Manual review statuses remain unchanged.",
+                "",
+            ]
+        )
+        markdown_path.write_text("\n".join(lines), encoding="utf-8")
+
+    def _write_sync_safe_csv(
+        self,
+        safe_csv_path: Path,
+        safe_candidates: list[InsertCandidateClassification],
+    ) -> None:
+        fieldnames = [
+            "source_candidate_id",
+            "candidate_brand",
+            "candidate_name",
+            "candidate_concentration",
+            "candidate_volume_ml",
+            "candidate_ean",
+            "candidate_gtin",
+            "candidate_upc",
+            "candidate_mpn",
+            "candidate_image_url",
+            "candidate_source_title",
+            "classification",
+            "confidence",
+            "duplicate_risk",
+            "duplicate_reason",
+            "nearest_perfume_id",
+            "nearest_perfume_brand",
+            "nearest_perfume_name",
+            "source_status",
+        ]
+        with safe_csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for entry in safe_candidates:
+                writer.writerow(entry.as_csv_row())
 
     def _build_excluded_decision(
         self,
@@ -889,6 +1664,25 @@ def format_candidate_report_summary(report: Mapping[str, object], report_path: P
         f"candidates_updated={report.get('candidates_updated')}",
         f"candidates_unchanged={report.get('candidates_unchanged')}",
         f"candidates_ignored_existing_status={report.get('candidates_ignored_existing_status')}",
+        f"report_path={report_path}",
+    ]
+    return "\n".join(lines)
+
+
+def format_insert_candidate_sync_summary(
+    report: Mapping[str, object],
+    report_path: Path,
+) -> str:
+    lines = [
+        f"status={report.get('status')}",
+        f"dry_run={report.get('dry_run')}",
+        f"candidates_analyzed={report.get('candidates_analyzed')}",
+        f"staging_inserted={report.get('staging_inserted')}",
+        f"staging_updated={report.get('staging_updated')}",
+        f"staging_ignored_manual_status={report.get('staging_ignored_manual_status')}",
+        f"safe_new_candidates_count={report.get('safe_new_candidates_count')}",
+        f"markdown_report_path={report.get('markdown_report_path')}",
+        f"safe_csv_path={report.get('safe_csv_path')}",
         f"report_path={report_path}",
     ]
     return "\n".join(lines)

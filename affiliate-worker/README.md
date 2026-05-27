@@ -75,6 +75,21 @@ Implemented in PR09:
 - PostgreSQL advisory locking to prevent concurrent runs;
 - operational systemd templates and a VPS runbook.
 
+Implemented in PR10:
+
+- `sync-perfume-insert-candidates` daily staging sync from
+  `product_match_candidates` into `public.perfume_insert_candidates`;
+- conservative classification into `SAFE_INSERT_CANDIDATE`,
+  `NEEDS_MANUAL_REVIEW`, `POSSIBLE_DUPLICATE`, `VARIANT_OF_EXISTING` and
+  `NON_PERFUME_PRODUCT`;
+- preservation of manual staging decisions such as `approved`, `promoted`,
+  `rejected`, `merged_existing` and `needs_more_info`;
+- `first_seen_at` initialization plus `last_seen_at` / `seen_count` tracking for
+  recurring candidates;
+- Markdown / JSON reporting and CSV export for newly seen
+  `SAFE_INSERT_CANDIDATE` rows;
+- no automatic promotion into `public.perfumes`.
+
 Not implemented yet:
 
 - product variants;
@@ -110,6 +125,8 @@ python -m app.main match-offers --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main match-offers --advertiser 105475 --feed-id 97867
 python -m app.main create-candidates --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main create-candidates --advertiser 105475 --feed-id 97867
+python -m app.main sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --dry-run
+python -m app.main sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --report-dir /data/reports
 python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867
 python -m app.main run-affiliate-pipeline --network awin --random-delay-max-seconds 300
@@ -205,6 +222,37 @@ Aggregate pipeline reports are written as:
 The latest report is a copied JSON file instead of a symlink so it works
 cleanly on the Docker bind mount used on the VPS.
 
+For PR10, `sync-perfume-insert-candidates` reads open
+`product_match_candidates` rows for one advertiser/feed and syncs them into the
+staging table `public.perfume_insert_candidates`.
+
+It can be used independently after `create-candidates`, for example in a daily
+follow-up step:
+
+```bash
+python -m app.main sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --dry-run
+python -m app.main sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --report-dir /data/reports/daily
+```
+
+The command:
+
+- reads only `product_match_candidates`;
+- writes only `public.perfume_insert_candidates` unless `--dry-run` is used;
+- never promotes rows into `public.perfumes`;
+- never auto-approves or auto-promotes candidates;
+- preserves manual staging decisions and only refreshes candidate fields while
+  `review_status = 'pending'`;
+- updates `last_seen_at` and increments `seen_count` for recurring candidates.
+
+Recommended daily workflow:
+
+1. Run `run-affiliate-pipeline`.
+2. Run `sync-perfume-insert-candidates`.
+3. Review the Markdown report and SAFE CSV output.
+4. Approve candidates manually in CIS staging.
+5. Promote approved rows later with the SQL plan from
+   `promote_approved_perfume_insert_candidates.sql`.
+
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
 
 ```bash
@@ -258,6 +306,8 @@ docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-work
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker match-offers --advertiser 105475 --feed-id 97867
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker create-candidates --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker create-candidates --advertiser 105475 --feed-id 97867
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --report-dir /data/reports/daily
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
