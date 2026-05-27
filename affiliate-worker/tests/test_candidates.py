@@ -1026,7 +1026,7 @@ def test_sync_insert_candidates_classifies_non_perfume_and_ignores_promoted(
     with psycopg.connect(database_url) as conn:
         non_perfume = conn.execute(
             """
-            select classification
+            select classification, duplicate_risk
             from perfume_insert_candidates
             where source_candidate_id = (
                 select id
@@ -1034,7 +1034,7 @@ def test_sync_insert_candidates_classifies_non_perfume_and_ignores_promoted(
                 where candidate_name = 'Acme Home Fragrance Candle 100 ml'
             )
             """
-        ).fetchone()[0]
+        ).fetchone()
         promoted = conn.execute(
             """
             select review_status, seen_count
@@ -1045,5 +1045,35 @@ def test_sync_insert_candidates_classifies_non_perfume_and_ignores_promoted(
         ).fetchone()
 
     assert report["staging_ignored_manual_status"] >= 1
-    assert non_perfume == "NON_PERFUME_PRODUCT"
+    assert non_perfume == ("NON_PERFUME_PRODUCT", None)
     assert promoted == ("promoted", 10)
+
+
+def test_sync_insert_candidates_safe_duplicate_risk_stays_db_compatible(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    create_perfume_insert_candidates_table(database_url)
+    CandidateService(settings).create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+
+    CandidateService(settings).sync_perfume_insert_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select classification, duplicate_risk
+            from perfume_insert_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+
+    assert row == ("SAFE_INSERT_CANDIDATE", "low")
