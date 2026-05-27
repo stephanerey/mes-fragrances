@@ -716,7 +716,7 @@ class CandidateService:
             ):
                 classification = NON_PERFUME_PRODUCT
                 confidence = Decimal("0.9800")
-                duplicate_risk = "none"
+                duplicate_risk = None
                 duplicate_reason = "Detected non-perfume keywords in title or category."
             else:
                 exact_identifier_match = self._find_identifier_duplicate(
