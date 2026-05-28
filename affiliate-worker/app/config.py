@@ -36,6 +36,34 @@ class Settings(BaseSettings):
         default=None,
         alias="AWIN_PRODUCT_FEED_API_KEY",
     )
+    affiliate_email_report_enabled: bool = Field(
+        default=False,
+        alias="AFFILIATE_EMAIL_REPORT_ENABLED",
+    )
+    affiliate_email_report_to: str | None = Field(
+        default=None,
+        alias="AFFILIATE_EMAIL_REPORT_TO",
+    )
+    affiliate_email_report_from: str | None = Field(
+        default=None,
+        alias="AFFILIATE_EMAIL_REPORT_FROM",
+    )
+    affiliate_email_report_subject_prefix: str = Field(
+        default="[Awin]",
+        alias="AFFILIATE_EMAIL_REPORT_SUBJECT_PREFIX",
+    )
+    affiliate_email_report_send_on_success: bool = Field(
+        default=True,
+        alias="AFFILIATE_EMAIL_REPORT_SEND_ON_SUCCESS",
+    )
+    affiliate_email_report_send_on_failure: bool = Field(
+        default=True,
+        alias="AFFILIATE_EMAIL_REPORT_SEND_ON_FAILURE",
+    )
+    affiliate_email_report_command: str = Field(
+        default="sendmail",
+        alias="AFFILIATE_EMAIL_REPORT_COMMAND",
+    )
 
     @staticmethod
     def _is_secret_configured(value: SecretStr | None) -> bool:
@@ -61,6 +89,21 @@ class Settings(BaseSettings):
             "awin_product_feed_api_key_configured": self._is_secret_configured(
                 self.awin_product_feed_api_key
             ),
+            "affiliate_email_report_enabled": self.affiliate_email_report_enabled,
+            "affiliate_email_report_to_configured": bool(self.affiliate_email_report_to),
+            "affiliate_email_report_from_configured": bool(
+                self.affiliate_email_report_from
+            ),
+            "affiliate_email_report_subject_prefix": (
+                self.affiliate_email_report_subject_prefix
+            ),
+            "affiliate_email_report_send_on_success": (
+                self.affiliate_email_report_send_on_success
+            ),
+            "affiliate_email_report_send_on_failure": (
+                self.affiliate_email_report_send_on_failure
+            ),
+            "affiliate_email_report_command": self.affiliate_email_report_command,
         }
 
     @property

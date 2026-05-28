@@ -168,7 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_pipeline.add_argument("--dry-run", action="store_true")
     run_pipeline.add_argument("--random-delay-max-seconds", type=int, default=0)
     run_pipeline.add_argument("--skip-candidates", action="store_true")
+    run_pipeline.add_argument("--skip-candidate-sync", action="store_true")
+    run_pipeline.add_argument("--skip-refresh-dry-run", action="store_true")
     run_pipeline.add_argument("--no-stale-update", action="store_true")
+    run_pipeline.add_argument("--email-report", action="store_true")
+    run_pipeline.add_argument("--no-email-report", action="store_true")
 
     subparsers.add_parser(
         "inspect-db",
@@ -386,6 +390,14 @@ def run_apply_reviewed_product_match_candidates(args: argparse.Namespace) -> int
 
 def run_affiliate_pipeline(args: argparse.Namespace) -> int:
     settings = get_settings()
+    email_report_override: bool | None = None
+    if args.email_report and args.no_email_report:
+        raise CandidateError("--email-report and --no-email-report are mutually exclusive")
+    if args.email_report:
+        email_report_override = True
+    elif args.no_email_report:
+        email_report_override = False
+
     result = PipelineService(settings).run_pipeline(
         network=args.network,
         dry_run=args.dry_run,
@@ -393,7 +405,10 @@ def run_affiliate_pipeline(args: argparse.Namespace) -> int:
         feed_id=str(args.feed_id) if args.feed_id is not None else None,
         random_delay_max_seconds=args.random_delay_max_seconds,
         skip_candidates=args.skip_candidates,
+        skip_candidate_sync=args.skip_candidate_sync,
+        skip_refresh_dry_run=args.skip_refresh_dry_run,
         no_stale_update=args.no_stale_update,
+        email_report=email_report_override,
     )
     output = format_pipeline_report_summary(result.report, result.report_path)
     if result.exit_code == 1:

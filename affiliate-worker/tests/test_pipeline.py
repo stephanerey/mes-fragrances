@@ -72,6 +72,16 @@ def prepare_pipeline_database(
     settings = build_settings(tmp_path, TEST_DATABASE_URL)
     DatabaseService(settings).migrate_db()
 
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+        conn.execute(
+            """
+            create table if not exists perfume_insert_candidates (
+                id uuid primary key,
+                review_status varchar not null
+            )
+            """
+        )
+
     if extra_feeds:
         with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
             for advertiser_id, feed_id in extra_feeds:
@@ -216,9 +226,20 @@ class DummyMatchingService:
 
 
 class DummyCandidateService:
-    def __init__(self, reports_dir: Path) -> None:
+    def __init__(
+        self,
+        reports_dir: Path,
+        *,
+        fail_sync_for: set[tuple[str, str]] | None = None,
+        fail_refresh_for: set[tuple[str, str]] | None = None,
+    ) -> None:
         self.reports_dir = reports_dir
-        self.calls: list[tuple[str, str, bool]] = []
+        self.fail_sync_for = fail_sync_for or set()
+        self.fail_refresh_for = fail_refresh_for or set()
+        self.create_calls: list[tuple[str, str, bool]] = []
+        self.sync_calls: list[tuple[str, str, bool]] = []
+        self.refresh_calls: list[tuple[str, str, bool]] = []
+        self.apply_calls: list[tuple[str, str, bool]] = []
 
     def create_candidates(
         self,
@@ -231,7 +252,7 @@ class DummyCandidateService:
         disable_fuzzy: bool = False,
         min_review_score: int | None = None,
     ) -> tuple[dict[str, object], Path]:
-        self.calls.append((advertiser_id, feed_id, dry_run))
+        self.create_calls.append((advertiser_id, feed_id, dry_run))
         report = {
             "status": "success",
             "candidates_created": 2,
@@ -242,11 +263,150 @@ class DummyCandidateService:
         path.write_text(json.dumps(report), encoding="utf-8")
         return report, path
 
+    def sync_perfume_insert_candidates(
+        self,
+        *,
+        advertiser_id: str,
+        feed_id: str,
+        dry_run: bool,
+        limit: int | None = None,
+        report_dir: Path | None = None,
+        only_statuses: list[str] | None = None,
+    ) -> tuple[dict[str, object], Path]:
+        del limit, only_statuses
+        self.sync_calls.append((advertiser_id, feed_id, dry_run))
+        if (advertiser_id, feed_id) in self.fail_sync_for:
+            raise RuntimeError(f"sync failed for {advertiser_id}/{feed_id}")
+
+        target_dir = report_dir or self.reports_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        markdown_path = target_dir / f"sync_{advertiser_id}_{feed_id}.md"
+        safe_csv_path = target_dir / f"sync_safe_{advertiser_id}_{feed_id}.csv"
+        report = {
+            "status": "success",
+            "staging_inserted": 0 if dry_run else 3,
+            "staging_updated": 5,
+            "staging_ignored_manual_status": 2,
+            "safe_new_candidates_count": 4,
+            "safe_top_brands": [
+                {"candidate_brand": "MONTALE", "count": 2},
+                {"candidate_brand": "BOTANICAE", "count": 1},
+            ],
+            "markdown_report_path": str(markdown_path),
+            "safe_csv_path": str(safe_csv_path),
+        }
+        path = target_dir / f"sync_{advertiser_id}_{feed_id}.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        markdown_path.write_text("# sync\n", encoding="utf-8")
+        safe_csv_path.write_text("candidate_brand,count\nMONTALE,2\n", encoding="utf-8")
+        return report, path
+
+    def refresh_product_match_candidates(
+        self,
+        *,
+        advertiser_id: str,
+        feed_id: str,
+        dry_run: bool,
+        limit: int | None = None,
+        report_dir: Path | None = None,
+        only_statuses: list[str] | None = None,
+        brand: str | None = None,
+        min_score: int | None = None,
+    ) -> tuple[dict[str, object], Path]:
+        del limit, only_statuses, brand, min_score
+        self.refresh_calls.append((advertiser_id, feed_id, dry_run))
+        if (advertiser_id, feed_id) in self.fail_refresh_for:
+            raise RuntimeError(f"refresh failed for {advertiser_id}/{feed_id}")
+
+        target_dir = report_dir or self.reports_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        markdown_path = target_dir / f"refresh_{advertiser_id}_{feed_id}.md"
+        csv_path = target_dir / f"refresh_{advertiser_id}_{feed_id}.csv"
+        report = {
+            "status": "success",
+            "candidates_loaded": 9,
+            "candidates_updated": 3,
+            "candidates_without_match": 4,
+            "candidates_unchanged": 2,
+            "candidates_ignored_closed_status": 0,
+            "markdown_report_path": str(markdown_path),
+            "csv_report_path": str(csv_path),
+        }
+        path = target_dir / f"refresh_{advertiser_id}_{feed_id}.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        markdown_path.write_text("# refresh\n", encoding="utf-8")
+        csv_path.write_text("candidate_id,action\n1,update\n", encoding="utf-8")
+        return report, path
+
+    def apply_reviewed_product_match_candidates(
+        self,
+        *,
+        advertiser_id: str,
+        feed_id: str,
+        dry_run: bool,
+        limit: int | None = None,
+        report_dir: Path | None = None,
+        statuses: list[str] | None = None,
+        brand: str | None = None,
+        min_score: int | None = None,
+        allow_needs_review: bool = False,
+    ) -> tuple[dict[str, object], Path]:
+        del limit, report_dir, statuses, brand, min_score, allow_needs_review
+        self.apply_calls.append((advertiser_id, feed_id, dry_run))
+        raise AssertionError("apply-reviewed-product-match-candidates must not be called")
+
+
+class DummyEmailReportService:
+    def __init__(
+        self,
+        *,
+        success: bool = True,
+        attempted_when_forced: bool = True,
+    ) -> None:
+        self.success = success
+        self.attempted_when_forced = attempted_when_forced
+        self.calls: list[tuple[str, Path, bool | None]] = []
+
+    def send_pipeline_report(
+        self,
+        report: dict[str, object],
+        report_path: Path,
+        *,
+        force_enabled: bool | None = None,
+    ) -> dict[str, object]:
+        self.calls.append((str(report.get("status")), report_path, force_enabled))
+        attempted = bool(force_enabled) and self.attempted_when_forced
+        if not attempted:
+            return {
+                "attempted": False,
+                "success": False,
+                "skipped": True,
+                "command": "sendmail",
+                "enabled": False,
+                "subject": "",
+                "recipient_configured": False,
+                "sender_configured": False,
+                "error": "",
+            }
+        return {
+            "attempted": True,
+            "success": self.success,
+            "skipped": False,
+            "command": "sendmail",
+            "enabled": True,
+            "subject": "[Awin] Pipeline",
+            "recipient_configured": True,
+            "sender_configured": True,
+            "error": "" if self.success else "sendmail failed",
+        }
+
 
 def build_pipeline_service(
     settings: Settings,
     *,
     fail_raw_for: set[tuple[str, str]] | None = None,
+    fail_sync_for: set[tuple[str, str]] | None = None,
+    fail_refresh_for: set[tuple[str, str]] | None = None,
     rows_total: int = 5,
     rows_inserted_non_dry_run: int = 5,
     rows_duplicates_non_dry_run: int = 0,
@@ -256,6 +416,7 @@ def build_pipeline_service(
     DummyNormalizationService,
     DummyMatchingService,
     DummyCandidateService,
+    DummyEmailReportService,
 ]:
     reports_dir = settings.reports_dir
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -268,22 +429,30 @@ def build_pipeline_service(
     )
     normalization = DummyNormalizationService(reports_dir)
     matching = DummyMatchingService(reports_dir)
-    candidates = DummyCandidateService(reports_dir)
+    candidates = DummyCandidateService(
+        reports_dir,
+        fail_sync_for=fail_sync_for,
+        fail_refresh_for=fail_refresh_for,
+    )
+    email = DummyEmailReportService()
     service = PipelineService(
         settings,
         raw_staging_service=raw,
         normalization_service=normalization,
         matching_service=matching,
         candidate_service=candidates,
+        email_report_service=email,
         sleep_func=lambda _: None,
         randint_func=lambda low, high: high,
     )
-    return service, raw, normalization, matching, candidates
+    return service, raw, normalization, matching, candidates, email
 
 
 def test_pipeline_dry_run_writes_aggregate_and_latest_report(tmp_path: Path) -> None:
     settings, database_url = prepare_pipeline_database(tmp_path)
-    service, raw, normalization, matching, candidates = build_pipeline_service(settings)
+    service, raw, normalization, matching, candidates, email = build_pipeline_service(
+        settings
+    )
 
     result = service.run_pipeline(
         network="awin",
@@ -302,10 +471,17 @@ def test_pipeline_dry_run_writes_aggregate_and_latest_report(tmp_path: Path) -> 
     assert result.report["totals"]["normalized_rows_inserted"] == 0
     assert result.report["totals"]["offers_inserted"] == 0
     assert result.report["totals"]["candidates_created"] == 0
+    assert result.report["totals"]["staging_inserted"] == 0
+    assert result.report["totals"]["refresh_candidates_would_update"] == 3
     assert raw.calls == [("awin", "105475", "97867", True)]
     assert normalization.calls == [("105475", "97867", True)]
     assert matching.calls == [("105475", "97867", True, True)]
-    assert candidates.calls == [("105475", "97867", True)]
+    assert candidates.create_calls == [("105475", "97867", True)]
+    assert candidates.sync_calls == [("105475", "97867", True)]
+    assert candidates.refresh_calls == [("105475", "97867", True)]
+    assert candidates.apply_calls == []
+    assert email.calls == [("success", result.report_path, None)]
+    assert result.report["email_report"]["attempted"] is False
 
     latest_report = settings.reports_dir / PIPELINE_LATEST_REPORT_NAME
     assert result.report_path.exists()
@@ -335,7 +511,9 @@ def test_pipeline_discovers_active_feeds_generically(tmp_path: Path) -> None:
         tmp_path,
         extra_feeds=[("999001", "200001"), ("999002", "200002")],
     )
-    service, raw, normalization, matching, candidates = build_pipeline_service(settings)
+    service, raw, normalization, matching, candidates, _ = build_pipeline_service(
+        settings
+    )
 
     result = service.run_pipeline(network="awin", dry_run=True)
 
@@ -352,12 +530,17 @@ def test_pipeline_discovers_active_feeds_generically(tmp_path: Path) -> None:
         ("999002", "200002"),
     ]
     assert len(matching.calls) == 3
-    assert len(candidates.calls) == 3
+    assert len(candidates.create_calls) == 3
+    assert len(candidates.sync_calls) == 3
+    assert len(candidates.refresh_calls) == 3
+    assert candidates.apply_calls == []
 
 
 def test_pipeline_skips_when_lock_is_already_held(tmp_path: Path) -> None:
     settings, _ = prepare_pipeline_database(tmp_path)
-    service, raw, normalization, matching, candidates = build_pipeline_service(settings)
+    service, raw, normalization, matching, candidates, _ = build_pipeline_service(
+        settings
+    )
 
     with service.db_service.connect(autocommit=True) as conn:
         assert service._try_acquire_pipeline_lock(conn, network="awin") is True
@@ -374,14 +557,16 @@ def test_pipeline_skips_when_lock_is_already_held(tmp_path: Path) -> None:
     assert raw.calls == []
     assert normalization.calls == []
     assert matching.calls == []
-    assert candidates.calls == []
+    assert candidates.create_calls == []
+    assert candidates.sync_calls == []
+    assert candidates.refresh_calls == []
 
 
 def test_pipeline_raw_import_failure_skips_downstream_and_returns_non_zero(
     tmp_path: Path,
 ) -> None:
     settings, _ = prepare_pipeline_database(tmp_path)
-    service, raw, normalization, matching, candidates = build_pipeline_service(
+    service, raw, normalization, matching, candidates, _ = build_pipeline_service(
         settings,
         fail_raw_for={("105475", "97867")},
     )
@@ -401,9 +586,13 @@ def test_pipeline_raw_import_failure_skips_downstream_and_returns_non_zero(
     assert feed_result["steps"]["normalization"]["status"] == "skipped"
     assert feed_result["steps"]["matching"]["status"] == "skipped"
     assert feed_result["steps"]["candidates"]["status"] == "skipped"
+    assert feed_result["steps"]["candidate_sync"]["status"] == "skipped"
+    assert feed_result["steps"]["refresh_dry_run"]["status"] == "skipped"
     assert normalization.calls == []
     assert matching.calls == []
-    assert candidates.calls == []
+    assert candidates.create_calls == []
+    assert candidates.sync_calls == []
+    assert candidates.refresh_calls == []
     assert result.report["totals"]["stale_offers_deactivated"] == 0
     assert result.report["totals"]["candidates_created"] == 0
 
@@ -412,7 +601,7 @@ def test_pipeline_disables_stale_updates_when_raw_import_is_not_full_snapshot(
     tmp_path: Path,
 ) -> None:
     settings, _ = prepare_pipeline_database(tmp_path)
-    service, raw, normalization, matching, candidates = build_pipeline_service(
+    service, raw, normalization, matching, candidates, _ = build_pipeline_service(
         settings,
         rows_total=5,
         rows_inserted_non_dry_run=1,
@@ -430,5 +619,140 @@ def test_pipeline_disables_stale_updates_when_raw_import_is_not_full_snapshot(
     assert raw.calls == [("awin", "105475", "97867", False)]
     assert normalization.calls == [("105475", "97867", False)]
     assert matching.calls == [("105475", "97867", False, True)]
-    assert candidates.calls == [("105475", "97867", False)]
+    assert candidates.create_calls == [("105475", "97867", False)]
+    assert candidates.sync_calls == [("105475", "97867", False)]
+    assert candidates.refresh_calls == [("105475", "97867", True)]
     assert "Stale offer update skipped" in result.report["feeds"][0]["warnings"][0]
+
+
+def test_pipeline_skip_flags_disable_sync_and_refresh(tmp_path: Path) -> None:
+    settings, _ = prepare_pipeline_database(tmp_path)
+    service, raw, normalization, matching, candidates, _ = build_pipeline_service(
+        settings
+    )
+
+    result = service.run_pipeline(
+        network="awin",
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        skip_candidate_sync=True,
+        skip_refresh_dry_run=True,
+    )
+
+    assert result.exit_code == 0
+    assert raw.calls == [("awin", "105475", "97867", False)]
+    assert normalization.calls == [("105475", "97867", False)]
+    assert matching.calls == [("105475", "97867", False, False)]
+    assert candidates.create_calls == [("105475", "97867", False)]
+    assert candidates.sync_calls == []
+    assert candidates.refresh_calls == []
+    steps = result.report["feeds"][0]["steps"]
+    assert steps["candidate_sync"]["status"] == "skipped"
+    assert steps["refresh_dry_run"]["status"] == "skipped"
+
+
+def test_pipeline_sync_failure_is_blocking(tmp_path: Path) -> None:
+    settings, _ = prepare_pipeline_database(tmp_path)
+    service, _, _, _, candidates, _ = build_pipeline_service(
+        settings,
+        fail_sync_for={("105475", "97867")},
+    )
+
+    result = service.run_pipeline(
+        network="awin",
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    assert result.exit_code == 1
+    assert result.report["status"] == "failed"
+    feed_result = result.report["feeds"][0]
+    assert feed_result["steps"]["candidate_sync"]["status"] == "failed"
+    assert feed_result["steps"]["refresh_dry_run"]["status"] == "skipped"
+    assert candidates.create_calls == [("105475", "97867", False)]
+    assert candidates.sync_calls == [("105475", "97867", False)]
+    assert candidates.refresh_calls == []
+
+
+def test_pipeline_refresh_failure_is_warning_only(tmp_path: Path) -> None:
+    settings, _ = prepare_pipeline_database(tmp_path)
+    service, _, _, _, candidates, _ = build_pipeline_service(
+        settings,
+        fail_refresh_for={("105475", "97867")},
+    )
+
+    result = service.run_pipeline(
+        network="awin",
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    assert result.exit_code == 0
+    assert result.report["status"] == "success"
+    feed_result = result.report["feeds"][0]
+    assert feed_result["steps"]["candidate_sync"]["status"] == "success"
+    assert feed_result["steps"]["refresh_dry_run"]["status"] == "failed"
+    assert "Historical candidate refresh dry-run failed" in feed_result["warnings"][0]
+    assert candidates.sync_calls == [("105475", "97867", False)]
+    assert candidates.refresh_calls == [("105475", "97867", True)]
+
+
+def test_pipeline_email_disabled_by_default(tmp_path: Path) -> None:
+    settings, _ = prepare_pipeline_database(tmp_path)
+    service, _, _, _, _, email = build_pipeline_service(settings)
+
+    result = service.run_pipeline(
+        network="awin",
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+    )
+
+    assert result.exit_code == 0
+    assert email.calls == [("success", result.report_path, None)]
+    assert result.report["email_report"]["attempted"] is False
+
+
+def test_pipeline_email_can_be_forced_on_success(tmp_path: Path) -> None:
+    settings, _ = prepare_pipeline_database(tmp_path)
+    service, _, _, _, _, email = build_pipeline_service(settings)
+
+    result = service.run_pipeline(
+        network="awin",
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+        email_report=True,
+    )
+
+    assert result.exit_code == 0
+    assert email.calls == [("success", result.report_path, True)]
+    assert result.report["email_report"]["attempted"] is True
+    assert result.report["email_report"]["success"] is True
+
+
+def test_pipeline_failure_still_attempts_email_when_forced(tmp_path: Path) -> None:
+    settings, _ = prepare_pipeline_database(tmp_path)
+    service, _, _, _, _, _ = build_pipeline_service(
+        settings,
+        fail_raw_for={("105475", "97867")},
+    )
+    failing_email = DummyEmailReportService(success=False)
+    service.email_report_service = failing_email
+
+    result = service.run_pipeline(
+        network="awin",
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        email_report=True,
+    )
+
+    assert result.exit_code == 1
+    assert failing_email.calls == [("failed", result.report_path, True)]
+    assert result.report["email_report"]["attempted"] is True
+    assert result.report["email_report"]["success"] is False
+    assert any("Affiliate email report failed" in warning for warning in result.report["warnings"])
