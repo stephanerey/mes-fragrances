@@ -145,6 +145,44 @@ class InsertCandidateClassification:
         }
 
 
+@dataclass(frozen=True)
+class CandidateRefreshEvaluation:
+    candidate_id: int
+    candidate_brand: str | None
+    candidate_name: str
+    status_before: str
+    status_after: str
+    proposed_perfume_id_before: str | None
+    proposed_perfume_id_after: str | None
+    match_score_before: Decimal | None
+    match_score_after: Decimal | None
+    match_reason_before: str | None
+    match_reason_after: str | None
+    source_import_run_id: int | None
+    source_network_product_id: str | None
+    source_merchant_product_id: str | None
+    action: str
+
+    def as_csv_row(self) -> dict[str, object]:
+        return {
+            "candidate_id": self.candidate_id,
+            "candidate_brand": self.candidate_brand or "",
+            "candidate_name": self.candidate_name,
+            "status_before": self.status_before,
+            "status_after": self.status_after,
+            "proposed_perfume_id_before": self.proposed_perfume_id_before or "",
+            "proposed_perfume_id_after": self.proposed_perfume_id_after or "",
+            "match_score_before": _decimal_to_string(self.match_score_before) or "",
+            "match_score_after": _decimal_to_string(self.match_score_after) or "",
+            "match_reason_before": self.match_reason_before or "",
+            "match_reason_after": self.match_reason_after or "",
+            "source_import_run_id": self.source_import_run_id or "",
+            "source_network_product_id": self.source_network_product_id or "",
+            "source_merchant_product_id": self.source_merchant_product_id or "",
+            "action": self.action,
+        }
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -168,6 +206,18 @@ def _identifier_value(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _decimal_from_value(value: object) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    return Decimal(str(value))
+
+
+def _int_from_value(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 def build_candidate_dedupe_key(item: LoadedNormalizedItem) -> str:
@@ -592,6 +642,159 @@ class CandidateService:
                 pass
             raise CandidateError(message) from exc
 
+    def refresh_product_match_candidates(
+        self,
+        *,
+        advertiser_id: str,
+        feed_id: str,
+        dry_run: bool,
+        limit: int | None = None,
+        report_dir: Path | None = None,
+        only_statuses: list[str] | None = None,
+        brand: str | None = None,
+        min_score: int | None = None,
+    ) -> tuple[dict[str, object], Path]:
+        self.db_service.require_database_url()
+
+        selected_statuses = only_statuses or ["pending", "needs_review"]
+        report_root = report_dir or self.settings.reports_dir
+        report_root.mkdir(parents=True, exist_ok=True)
+        report_stamp = _report_timestamp()
+        markdown_path = report_root / f"refresh_product_match_candidates_{report_stamp}.md"
+        csv_path = report_root / f"refresh_product_match_candidates_updates_{report_stamp}.csv"
+        json_path = report_root / f"refresh_product_match_candidates_{report_stamp}.json"
+        report: dict[str, object] = {
+            "checked_at": _utc_now(),
+            "status": "error",
+            "command": "refresh-product-match-candidates",
+            "network": "awin",
+            "advertiser_id": advertiser_id,
+            "feed_id": feed_id,
+            "dry_run": dry_run,
+            "database_url_redacted": True,
+            "selection_limit": limit,
+            "brand": brand,
+            "min_score": min_score,
+            "only_statuses": selected_statuses,
+            "candidates_loaded": 0,
+            "candidates_evaluated": 0,
+            "candidates_updated": 0,
+            "candidates_unchanged": 0,
+            "candidates_without_match": 0,
+            "candidates_ignored_closed_status": 0,
+            "top_brands": [],
+            "status_counts_before": {},
+            "status_counts_after": {},
+            "sample_updates": [],
+            "markdown_report_path": str(markdown_path),
+            "csv_report_path": str(csv_path),
+        }
+
+        try:
+            with self.db_service.connect() as conn:
+                advertiser_row, affiliate_feed_row = self.matching_service._resolve_feed_context(  # noqa: SLF001
+                    conn,
+                    advertiser_id=advertiser_id,
+                    feed_id=feed_id,
+                )
+                source_candidates = self._load_refresh_source_candidates(
+                    conn,
+                    advertiser_db_id=int(advertiser_row["id"]),
+                    network_feed_id=str(affiliate_feed_row["network_feed_id"]),
+                    only_statuses=selected_statuses,
+                    brand=brand,
+                    limit=limit,
+                )
+                catalog_rows, available_catalog_columns = (
+                    self.matching_service._load_catalog_perfumes(conn)  # noqa: SLF001
+                )
+                locked_mappings = self.matching_service._load_locked_mappings(  # noqa: SLF001
+                    conn,
+                    advertiser_db_id=int(advertiser_row["id"]),
+                    auto_threshold=int(self.settings.affiliate_match_auto_threshold),
+                )
+                catalog_identifier_fields = [
+                    field
+                    for field in ("ean", "gtin", "upc", "mpn")
+                    if field in available_catalog_columns
+                ]
+                catalog_by_brand: dict[str, list[CatalogPerfume]] = {}
+                for perfume in catalog_rows:
+                    catalog_by_brand.setdefault(perfume.normalized_brand, []).append(perfume)
+
+                evaluations: list[CandidateRefreshEvaluation] = []
+                for source in source_candidates:
+                    evaluations.append(
+                        self._evaluate_candidate_refresh(
+                            source,
+                            affiliate_feed_db_id=int(affiliate_feed_row["id"]),
+                            catalog_rows=catalog_rows,
+                            catalog_by_brand=catalog_by_brand,
+                            catalog_identifier_fields=catalog_identifier_fields,
+                            locked_mappings=locked_mappings,
+                            auto_threshold=int(self.settings.affiliate_match_auto_threshold),
+                            review_threshold=int(
+                                self.settings.affiliate_match_review_threshold
+                            ),
+                            min_score=min_score,
+                        )
+                    )
+
+                action_counts = Counter(entry.action for entry in evaluations)
+                brand_counts = Counter(
+                    (entry.candidate_brand or "<missing>") for entry in evaluations
+                )
+                status_counts_before = Counter(entry.status_before for entry in evaluations)
+                status_counts_after = Counter(entry.status_after for entry in evaluations)
+                report.update(
+                    {
+                        "status": "success",
+                        "candidates_loaded": len(source_candidates),
+                        "candidates_evaluated": len(evaluations),
+                        "candidates_updated": action_counts.get("update", 0),
+                        "candidates_unchanged": action_counts.get("unchanged", 0),
+                        "candidates_without_match": action_counts.get("no_match", 0),
+                        "candidates_ignored_closed_status": action_counts.get(
+                            "ignored_closed_status",
+                            0,
+                        ),
+                        "top_brands": [
+                            {"candidate_brand": brand_name, "count": count}
+                            for brand_name, count in brand_counts.most_common(10)
+                        ],
+                        "status_counts_before": dict(sorted(status_counts_before.items())),
+                        "status_counts_after": dict(sorted(status_counts_after.items())),
+                        "sample_updates": [
+                            entry.as_csv_row()
+                            for entry in evaluations
+                            if entry.action == "update"
+                        ][:10],
+                    }
+                )
+
+                if not dry_run:
+                    self._persist_candidate_refreshes(conn, evaluations=evaluations)
+
+                self._write_refresh_markdown(markdown_path, report)
+                self._write_refresh_csv(csv_path, evaluations)
+
+            json_path.write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return report, json_path
+        except Exception as exc:
+            message = str(exc)
+            report["error"] = message
+            try:
+                json_path.write_text(
+                    json.dumps(report, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+            raise CandidateError(message) from exc
+
     def _ensure_candidate_dedupe_column(self, conn: Any) -> None:
         row = conn.execute(
             """
@@ -657,6 +860,34 @@ class CandidateService:
             order by id
         """
         params: list[object] = [advertiser_db_id, only_statuses, network_feed_id]
+        if limit is not None:
+            sql += " limit %s"
+            params.append(limit)
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def _load_refresh_source_candidates(
+        self,
+        conn: Any,
+        *,
+        advertiser_db_id: int,
+        network_feed_id: str,
+        only_statuses: list[str],
+        brand: str | None,
+        limit: int | None,
+    ) -> list[dict[str, object]]:
+        sql = """
+            select *
+            from product_match_candidates
+            where advertiser_id = %s
+              and status = any(%s)
+              and coalesce(enrichment_payload ->> 'network_feed_id', '') = %s
+        """
+        params: list[object] = [advertiser_db_id, only_statuses, network_feed_id]
+        if brand:
+            sql += " and lower(coalesce(candidate_brand, '')) = lower(%s)"
+            params.append(brand)
+        sql += " order by id"
         if limit is not None:
             sql += " limit %s"
             params.append(limit)
@@ -844,6 +1075,371 @@ class CandidateService:
                 )
             )
         return classifications
+
+    def _evaluate_candidate_refresh(
+        self,
+        source: dict[str, object],
+        *,
+        affiliate_feed_db_id: int,
+        catalog_rows: list[CatalogPerfume],
+        catalog_by_brand: dict[str, list[CatalogPerfume]],
+        catalog_identifier_fields: list[str],
+        locked_mappings: list[object],
+        auto_threshold: int,
+        review_threshold: int,
+        min_score: int | None,
+    ) -> CandidateRefreshEvaluation:
+        status_before = str(source["status"])
+        proposed_before = (
+            str(source["proposed_perfume_id"])
+            if source.get("proposed_perfume_id") is not None
+            else None
+        )
+        score_before = (
+            Decimal(str(source["match_score"]))
+            if source.get("match_score") is not None
+            else None
+        )
+        reason_before = (
+            str(source["match_reason"]) if source.get("match_reason") is not None else None
+        )
+
+        if status_before not in AUTO_MUTABLE_CANDIDATE_STATUSES:
+            return CandidateRefreshEvaluation(
+                candidate_id=int(source["id"]),
+                candidate_brand=(
+                    str(source["candidate_brand"])
+                    if source.get("candidate_brand") is not None
+                    else None
+                ),
+                candidate_name=str(source["candidate_name"]),
+                status_before=status_before,
+                status_after=status_before,
+                proposed_perfume_id_before=proposed_before,
+                proposed_perfume_id_after=proposed_before,
+                match_score_before=score_before,
+                match_score_after=score_before,
+                match_reason_before=reason_before,
+                match_reason_after=reason_before,
+                source_import_run_id=_int_from_value(
+                    dict(source.get("enrichment_payload") or {}).get("import_run_id")
+                ),
+                source_network_product_id=_identifier_value(
+                    dict(source.get("enrichment_payload") or {}).get("network_product_id")
+                ),
+                source_merchant_product_id=_identifier_value(
+                    dict(source.get("enrichment_payload") or {}).get("merchant_product_id")
+                ),
+                action="ignored_closed_status",
+            )
+
+        item = self._rebuild_refresh_item(
+            source,
+            affiliate_feed_db_id=affiliate_feed_db_id,
+        )
+        match_result = self.matching_service._match_item(  # noqa: SLF001
+            item,
+            catalog_rows=catalog_rows,
+            catalog_by_brand=catalog_by_brand,
+            catalog_identifier_fields=catalog_identifier_fields,
+            locked_mappings=locked_mappings,
+            auto_threshold=auto_threshold,
+            review_threshold=review_threshold,
+            disable_fuzzy=False,
+        )
+        score_after = (
+            Decimal(str(match_result.score)) if match_result.score > 0 else None
+        )
+        proposed_after = match_result.perfume_id
+        action = self._decide_candidate_refresh_action(
+            status_before=status_before,
+            proposed_before=proposed_before,
+            score_before=score_before,
+            proposed_after=proposed_after,
+            score_after=score_after,
+            min_score=min_score,
+        )
+        status_after = status_before
+        reason_after = reason_before
+        if action == "update":
+            status_after = "needs_review"
+            reason_after = match_result.match_reason
+        elif action == "no_match":
+            reason_after = match_result.match_reason
+        return CandidateRefreshEvaluation(
+            candidate_id=int(source["id"]),
+            candidate_brand=(
+                str(source["candidate_brand"]) if source.get("candidate_brand") else None
+            ),
+            candidate_name=str(source["candidate_name"]),
+            status_before=status_before,
+            status_after=status_after,
+            proposed_perfume_id_before=proposed_before,
+            proposed_perfume_id_after=proposed_after if action == "update" else proposed_before,
+            match_score_before=score_before,
+            match_score_after=score_after if action == "update" else score_before,
+            match_reason_before=reason_before,
+            match_reason_after=reason_after,
+            source_import_run_id=_int_from_value(
+                dict(source.get("enrichment_payload") or {}).get("import_run_id")
+            ),
+            source_network_product_id=_identifier_value(
+                dict(source.get("enrichment_payload") or {}).get("network_product_id")
+            ),
+            source_merchant_product_id=_identifier_value(
+                dict(source.get("enrichment_payload") or {}).get("merchant_product_id")
+            ),
+            action=action,
+        )
+
+    def _rebuild_refresh_item(
+        self,
+        source: dict[str, object],
+        *,
+        affiliate_feed_db_id: int,
+    ) -> LoadedNormalizedItem:
+        enrichment = dict(source.get("enrichment_payload") or {})
+        brand = (
+            str(source["candidate_brand"])
+            if source.get("candidate_brand") is not None
+            else _identifier_value(enrichment.get("brand"))
+        )
+        title = _identifier_value(enrichment.get("title")) or str(source["candidate_name"])
+        concentration = (
+            str(source["candidate_concentration"])
+            if source.get("candidate_concentration") is not None
+            else _identifier_value(enrichment.get("concentration"))
+        )
+        volume_ml = source.get("candidate_volume_ml")
+        if volume_ml is None:
+            volume_ml = _decimal_from_value(enrichment.get("volume_ml"))
+        network_product_id = _identifier_value(enrichment.get("network_product_id"))
+        merchant_product_id = _identifier_value(enrichment.get("merchant_product_id"))
+        candidate_url = (
+            _identifier_value(source.get("candidate_url"))
+            or _identifier_value(enrichment.get("affiliate_url"))
+            or _identifier_value(enrichment.get("merchant_url"))
+        )
+        image_url = (
+            _identifier_value(source.get("candidate_image_url"))
+            or _identifier_value(enrichment.get("image_url"))
+        )
+        category = (
+            str(source["candidate_category"])
+            if source.get("candidate_category") is not None
+            else _identifier_value(enrichment.get("category"))
+        )
+        normalized_title = _identifier_value(enrichment.get("normalized_title")) or normalize_text(
+            title
+        )
+        normalized_brand = _identifier_value(
+            enrichment.get("normalized_brand")
+        ) or normalize_text(brand)
+        normalized_category = normalize_text(category)
+        price = _decimal_from_value(enrichment.get("price"))
+        raw_payload = dict(enrichment.get("raw_payload") or enrichment)
+        return LoadedNormalizedItem(
+            id=_int_from_value(enrichment.get("normalized_feed_item_id")) or int(source["id"]),
+            raw_feed_item_id=_int_from_value(source.get("raw_feed_item_id"))
+            or _int_from_value(enrichment.get("raw_feed_item_id"))
+            or int(source["id"]),
+            raw_hash=_identifier_value(enrichment.get("raw_hash")) or f"candidate:{source['id']}",
+            import_run_id=_int_from_value(enrichment.get("import_run_id")) or 0,
+            advertiser_id=int(source["advertiser_id"]),
+            feed_id=affiliate_feed_db_id,
+            network=_identifier_value(enrichment.get("network")) or "awin",
+            network_product_id=network_product_id,
+            merchant_product_id=merchant_product_id,
+            title=title,
+            normalized_title=normalized_title,
+            description=_identifier_value(enrichment.get("description")),
+            brand=brand,
+            normalized_brand=normalized_brand or None,
+            category=category,
+            normalized_category=normalized_category or None,
+            price=price,
+            currency=_identifier_value(enrichment.get("currency")),
+            delivery_cost=_decimal_from_value(enrichment.get("delivery_cost")),
+            affiliate_url=candidate_url,
+            merchant_url=_identifier_value(enrichment.get("merchant_url")),
+            image_url=image_url,
+            ean=_identifier_value(enrichment.get("ean")),
+            gtin=_identifier_value(enrichment.get("gtin")),
+            upc=_identifier_value(enrichment.get("upc")),
+            mpn=_identifier_value(enrichment.get("mpn")),
+            in_stock=None,
+            stock_status=_identifier_value(enrichment.get("stock_status")),
+            concentration=concentration,
+            volume_ml=volume_ml,
+            is_fragrance=True,
+            is_excluded=False,
+            exclusion_reasons=[],
+            missing_required_columns=[],
+            missing_recommended_columns=[],
+            normalized_payload=dict(enrichment),
+            raw_payload=raw_payload,
+            match_key=build_perfume_match_key(
+                title,
+                brand=brand,
+                concentration=concentration,
+                volume_ml=volume_ml,
+            ),
+        )
+
+    def _decide_candidate_refresh_action(
+        self,
+        *,
+        status_before: str,
+        proposed_before: str | None,
+        score_before: Decimal | None,
+        proposed_after: str | None,
+        score_after: Decimal | None,
+        min_score: int | None,
+    ) -> str:
+        if status_before not in AUTO_MUTABLE_CANDIDATE_STATUSES:
+            return "ignored_closed_status"
+        if proposed_after is None:
+            return "no_match"
+        if min_score is not None:
+            comparable_score = float(score_after or Decimal("0"))
+            if comparable_score < float(min_score):
+                return "unchanged"
+        if proposed_before is None:
+            return "update"
+        if score_before is None:
+            return "update"
+        if score_after is None:
+            return "unchanged"
+        if proposed_before != proposed_after and score_after > score_before:
+            return "update"
+        if proposed_before == proposed_after and score_after > score_before:
+            return "update"
+        return "unchanged"
+
+    def _persist_candidate_refreshes(
+        self,
+        conn: Any,
+        *,
+        evaluations: list[CandidateRefreshEvaluation],
+    ) -> None:
+        with conn.transaction():
+            for evaluation in evaluations:
+                if evaluation.action != "update":
+                    continue
+                existing = conn.execute(
+                    """
+                    select enrichment_payload
+                    from product_match_candidates
+                    where id = %s
+                    """,
+                    (evaluation.candidate_id,),
+                ).fetchone()
+                enrichment_payload = (
+                    dict(existing["enrichment_payload"])
+                    if existing is not None and existing["enrichment_payload"] is not None
+                    else {}
+                )
+                enrichment_payload["refresh_command"] = "refresh-product-match-candidates"
+                enrichment_payload["refresh_checked_at"] = _utc_now()
+                conn.execute(
+                    """
+                    update product_match_candidates
+                    set proposed_perfume_id = %s,
+                        match_score = %s,
+                        match_reason = %s,
+                        status = %s,
+                        enrichment_payload = %s,
+                        updated_at = now()
+                    where id = %s
+                    """,
+                    (
+                        evaluation.proposed_perfume_id_after,
+                        evaluation.match_score_after,
+                        evaluation.match_reason_after,
+                        evaluation.status_after,
+                        Jsonb(enrichment_payload),
+                        evaluation.candidate_id,
+                    ),
+                )
+
+    def _write_refresh_markdown(
+        self,
+        markdown_path: Path,
+        report: Mapping[str, object],
+    ) -> None:
+        lines = [
+            "# refresh-product-match-candidates",
+            "",
+            f"- status: `{report.get('status')}`",
+            f"- dry_run: `{report.get('dry_run')}`",
+            f"- advertiser_id: `{report.get('advertiser_id')}`",
+            f"- feed_id: `{report.get('feed_id')}`",
+            f"- brand: `{report.get('brand') or '*'} `",
+            f"- candidates_loaded: `{report.get('candidates_loaded')}`",
+            f"- candidates_updated: `{report.get('candidates_updated')}`",
+            f"- candidates_without_match: `{report.get('candidates_without_match')}`",
+            f"- candidates_unchanged: `{report.get('candidates_unchanged')}`",
+            (
+                "- candidates_ignored_closed_status: "
+                f"`{report.get('candidates_ignored_closed_status')}`"
+            ),
+            "",
+            "## Status counts before",
+            "",
+        ]
+        for status_name, count in (report.get("status_counts_before") or {}).items():
+            lines.append(f"- `{status_name}`: `{count}`")
+        lines.extend(["", "## Status counts after", ""])
+        for status_name, count in (report.get("status_counts_after") or {}).items():
+            lines.append(f"- `{status_name}`: `{count}`")
+        lines.extend(["", "## Top brands", ""])
+        top_brands = report.get("top_brands") or []
+        if top_brands:
+            for row in top_brands:
+                lines.append(f"- `{row.get('candidate_brand')}`: `{row.get('count')}`")
+        else:
+            lines.append("- none")
+        lines.extend(
+            [
+                "",
+                "## Safety",
+                "",
+                "- This command updates only `public.product_match_candidates`.",
+                "- It never promotes candidates into `public.perfumes`.",
+                "- It never links or mutates `public.offers`.",
+                "- Open candidates with a new match are moved to `needs_review` conservatively.",
+                "",
+            ]
+        )
+        markdown_path.write_text("\n".join(lines), encoding="utf-8")
+
+    def _write_refresh_csv(
+        self,
+        csv_path: Path,
+        evaluations: list[CandidateRefreshEvaluation],
+    ) -> None:
+        fieldnames = [
+            "candidate_id",
+            "candidate_brand",
+            "candidate_name",
+            "status_before",
+            "status_after",
+            "proposed_perfume_id_before",
+            "proposed_perfume_id_after",
+            "match_score_before",
+            "match_score_after",
+            "match_reason_before",
+            "match_reason_after",
+            "source_import_run_id",
+            "source_network_product_id",
+            "source_merchant_product_id",
+            "action",
+        ]
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for evaluation in evaluations:
+                writer.writerow(evaluation.as_csv_row())
 
     def _is_non_perfume_candidate(
         self,
@@ -1683,6 +2279,25 @@ def format_insert_candidate_sync_summary(
         f"safe_new_candidates_count={report.get('safe_new_candidates_count')}",
         f"markdown_report_path={report.get('markdown_report_path')}",
         f"safe_csv_path={report.get('safe_csv_path')}",
+        f"report_path={report_path}",
+    ]
+    return "\n".join(lines)
+
+
+def format_refresh_candidate_summary(
+    report: Mapping[str, object],
+    report_path: Path,
+) -> str:
+    lines = [
+        f"status={report.get('status')}",
+        f"dry_run={report.get('dry_run')}",
+        f"candidates_loaded={report.get('candidates_loaded')}",
+        f"candidates_updated={report.get('candidates_updated')}",
+        f"candidates_without_match={report.get('candidates_without_match')}",
+        f"candidates_unchanged={report.get('candidates_unchanged')}",
+        f"candidates_ignored_closed_status={report.get('candidates_ignored_closed_status')}",
+        f"markdown_report_path={report.get('markdown_report_path')}",
+        f"csv_report_path={report.get('csv_report_path')}",
         f"report_path={report_path}",
     ]
     return "\n".join(lines)

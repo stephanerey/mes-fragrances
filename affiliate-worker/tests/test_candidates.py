@@ -405,6 +405,25 @@ def create_perfume_insert_candidates_table(database_url: str) -> None:
         )
 
 
+def insert_perfume(
+    database_url: str,
+    *,
+    brand: str,
+    name: str,
+    slug: str,
+) -> str:
+    perfume_id = str(uuid4())
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            """
+            insert into perfumes (id, slug, name, brand)
+            values (%s, %s, %s, %s)
+            """,
+            (perfume_id, slug, name, brand),
+        )
+    return perfume_id
+
+
 def advertiser_db_id(database_url: str, advertiser_id: str = "105475") -> int:
     with psycopg.connect(database_url) as conn:
         return int(
@@ -1077,3 +1096,244 @@ def test_sync_insert_candidates_safe_duplicate_risk_stays_db_compatible(
         ).fetchone()
 
     assert row == ("SAFE_INSERT_CANDIDATE", "low")
+
+
+def test_refresh_product_match_candidates_dry_run_does_not_write(tmp_path: Path) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    CandidateService(settings).create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+    expected_perfume_id = insert_perfume(
+        database_url,
+        brand="Acme",
+        name="Acme Secret Bloom 50 ml",
+        slug="acme-secret-bloom",
+    )
+
+    report, report_path = CandidateService(settings).refresh_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select status, proposed_perfume_id
+            from product_match_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+
+    assert report["status"] == "success"
+    assert report["candidates_updated"] >= 1
+    assert report_path.exists()
+    assert row == ("pending", None)
+    assert expected_perfume_id is not None
+
+
+def test_refresh_product_match_candidates_updates_pending_candidate(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    CandidateService(settings).create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+    perfume_id = insert_perfume(
+        database_url,
+        brand="Acme",
+        name="Acme Secret Bloom 50 ml",
+        slug="acme-secret-bloom",
+    )
+
+    report, _ = CandidateService(settings).refresh_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select status, proposed_perfume_id, match_score
+            from product_match_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+
+    assert report["candidates_updated"] >= 1
+    assert row[0] == "needs_review"
+    assert str(row[1]) == perfume_id
+    assert row[2] is not None
+
+
+def test_refresh_product_match_candidates_updates_needs_review_candidate(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    service = CandidateService(settings)
+    service.create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+    perfume_id = insert_perfume(
+        database_url,
+        brand="Acme",
+        name="Acme Secret Bloom 50 ml",
+        slug="acme-secret-bloom",
+    )
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            """
+            update product_match_candidates
+            set status = 'needs_review',
+                match_score = 10,
+                match_reason = 'Old weak match.'
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        )
+
+    report, _ = service.refresh_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select status, proposed_perfume_id, match_score, match_reason
+            from product_match_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+
+    assert report["candidates_updated"] >= 1
+    assert row[0] == "needs_review"
+    assert str(row[1]) == perfume_id
+    assert row[2] > 10
+    assert "Matched" in row[3]
+
+
+def test_refresh_product_match_candidates_ignores_closed_statuses(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    service = CandidateService(settings)
+    service.create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+    insert_perfume(
+        database_url,
+        brand="Acme",
+        name="Acme Secret Bloom 50 ml",
+        slug="acme-secret-bloom",
+    )
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            """
+            update product_match_candidates
+            set status = 'accepted_new_perfume'
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        )
+
+    report, _ = service.refresh_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        only_statuses=["accepted_new_perfume"],
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select status, proposed_perfume_id
+            from product_match_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+
+    assert report["candidates_ignored_closed_status"] >= 1
+    assert row == ("accepted_new_perfume", None)
+
+
+def test_refresh_product_match_candidates_brand_filter(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    service = CandidateService(settings)
+    service.create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+    insert_perfume(
+        database_url,
+        brand="Acme",
+        name="Acme Secret Bloom 50 ml",
+        slug="acme-secret-bloom",
+    )
+
+    report, _ = service.refresh_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        brand="MONTALE",
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select status, proposed_perfume_id
+            from product_match_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+
+    assert report["candidates_loaded"] == 0
+    assert row == ("pending", None)
+
+
+def test_refresh_product_match_candidates_without_match_stays_unchanged(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    service = CandidateService(settings)
+    service.create_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        min_review_score=70,
+    )
+
+    report, report_path = service.refresh_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select status, proposed_perfume_id
+            from product_match_candidates
+            where candidate_name = 'Acme Secret Bloom 50 ml'
+            """
+        ).fetchone()
+
+    assert report["candidates_without_match"] >= 1
+    assert report_path.exists()
+    assert row == ("pending", None)
