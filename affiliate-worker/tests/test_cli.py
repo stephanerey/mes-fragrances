@@ -269,6 +269,31 @@ def test_sync_perfume_insert_candidates_requires_database_url(
     assert "DATABASE_URL" in captured.err
 
 
+def test_refresh_product_match_candidates_requires_database_url(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    isolate_settings(monkeypatch, tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    clear_settings_cache()
+
+    exit_code = main(
+        [
+            "refresh-product-match-candidates",
+            "--advertiser",
+            "105475",
+            "--feed-id",
+            "97867",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "DATABASE_URL" in captured.err
+
+
 def test_run_affiliate_pipeline_requires_database_url(
     monkeypatch,
     capsys,

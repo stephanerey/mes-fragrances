@@ -11,6 +11,7 @@ from app.candidates import (
     CandidateService,
     format_candidate_report_summary,
     format_insert_candidate_sync_summary,
+    format_refresh_candidate_summary,
 )
 from app.config import get_settings
 from app.db import (
@@ -122,6 +123,22 @@ def build_parser() -> argparse.ArgumentParser:
     sync_insert_candidates.add_argument("--limit", type=int)
     sync_insert_candidates.add_argument("--report-dir", type=Path)
     sync_insert_candidates.add_argument("--only-status", default="pending,needs_review")
+
+    refresh_candidates = subparsers.add_parser(
+        "refresh-product-match-candidates",
+        help=(
+            "Recompute historical open product_match_candidates against the current "
+            "catalog without touching offers or perfumes."
+        ),
+    )
+    refresh_candidates.add_argument("--advertiser", required=True)
+    refresh_candidates.add_argument("--feed-id", required=True)
+    refresh_candidates.add_argument("--dry-run", action="store_true")
+    refresh_candidates.add_argument("--limit", type=int)
+    refresh_candidates.add_argument("--report-dir", type=Path)
+    refresh_candidates.add_argument("--only-status", default="pending,needs_review")
+    refresh_candidates.add_argument("--brand")
+    refresh_candidates.add_argument("--min-score", type=int)
 
     run_pipeline = subparsers.add_parser(
         "run-affiliate-pipeline",
@@ -308,6 +325,27 @@ def run_sync_perfume_insert_candidates(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_refresh_product_match_candidates(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    only_statuses = [
+        status.strip() for status in str(args.only_status).split(",") if status.strip()
+    ]
+    if not only_statuses:
+        raise CandidateError("--only-status must contain at least one status")
+    report, report_path = CandidateService(settings).refresh_product_match_candidates(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        dry_run=args.dry_run,
+        limit=args.limit,
+        report_dir=args.report_dir,
+        only_statuses=only_statuses,
+        brand=str(args.brand) if args.brand is not None else None,
+        min_score=args.min_score,
+    )
+    print(format_refresh_candidate_summary(report, report_path))
+    return 0
+
+
 def run_affiliate_pipeline(args: argparse.Namespace) -> int:
     settings = get_settings()
     result = PipelineService(settings).run_pipeline(
@@ -368,6 +406,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_create_candidates(args)
         if args.command == "sync-perfume-insert-candidates":
             return run_sync_perfume_insert_candidates(args)
+        if args.command == "refresh-product-match-candidates":
+            return run_refresh_product_match_candidates(args)
         if args.command == "run-affiliate-pipeline":
             return run_affiliate_pipeline(args)
         if args.command == "inspect-db":
