@@ -23,6 +23,8 @@ def test_show_config_masks_secrets(monkeypatch, capsys, tmp_path: Path) -> None:
     monkeypatch.setenv("AWIN_API_TOKEN", "super-secret-token")
     monkeypatch.setenv("AWIN_PRODUCT_FEED_API_KEY", "feed-secret")
     monkeypatch.setenv("AWIN_PUBLISHER_ID", "12345")
+    monkeypatch.setenv("AFFILIATE_EMAIL_REPORT_TO", "ops@example.test")
+    monkeypatch.setenv("AFFILIATE_EMAIL_REPORT_FROM", "worker@example.test")
     clear_settings_cache()
 
     exit_code = main(["show-config"])
@@ -33,6 +35,10 @@ def test_show_config_masks_secrets(monkeypatch, capsys, tmp_path: Path) -> None:
     assert '"database_url_configured": true' in captured.out
     assert '"awin_api_token_configured": true' in captured.out
     assert '"awin_product_feed_api_key_configured": true' in captured.out
+    assert "ops@example.test" not in captured.out
+    assert "worker@example.test" not in captured.out
+    assert '"affiliate_email_report_to_configured": true' in captured.out
+    assert '"affiliate_email_report_from_configured": true' in captured.out
 
 
 def test_import_local_csv_requires_database_url(monkeypatch, capsys, tmp_path: Path) -> None:
@@ -333,6 +339,29 @@ def test_run_affiliate_pipeline_requires_database_url(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "DATABASE_URL" in captured.err
+
+
+def test_run_affiliate_pipeline_rejects_conflicting_email_flags(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    isolate_settings(monkeypatch, tmp_path)
+    clear_settings_cache()
+
+    exit_code = main(
+        [
+            "run-affiliate-pipeline",
+            "--network",
+            "awin",
+            "--email-report",
+            "--no-email-report",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "mutually exclusive" in captured.err
 
 
 def test_inspect_db_requires_database_url(monkeypatch, capsys, tmp_path: Path) -> None:

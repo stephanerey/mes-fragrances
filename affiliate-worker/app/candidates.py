@@ -590,6 +590,7 @@ class CandidateService:
             "staging_pending_refreshed": 0,
             "classification_counts": {},
             "top_brands": [],
+            "safe_top_brands": [],
             "safe_new_candidates_count": 0,
             "markdown_report_path": str(markdown_path),
             "safe_csv_path": str(safe_csv_path),
@@ -621,6 +622,11 @@ class CandidateService:
                 brand_counts = Counter(
                     entry.candidate_brand or "<missing>" for entry in classifications
                 )
+                safe_brand_counts = Counter(
+                    entry.candidate_brand or "<missing>"
+                    for entry in classifications
+                    if entry.classification == SAFE_INSERT_CANDIDATE
+                )
                 classification_counts = Counter(
                     entry.classification for entry in classifications
                 )
@@ -632,6 +638,10 @@ class CandidateService:
                         "top_brands": [
                             {"candidate_brand": brand, "count": count}
                             for brand, count in brand_counts.most_common(10)
+                        ],
+                        "safe_top_brands": [
+                            {"candidate_brand": brand, "count": count}
+                            for brand, count in safe_brand_counts.most_common(10)
                         ],
                     }
                 )
@@ -2242,6 +2252,15 @@ class CandidateService:
         top_brands = report.get("top_brands") or []
         if top_brands:
             for row in top_brands:
+                lines.append(
+                    f"- `{row.get('candidate_brand')}`: `{row.get('count')}`"
+                )
+        else:
+            lines.append("- none")
+        lines.extend(["", "## SAFE top brands", ""])
+        safe_top_brands = report.get("safe_top_brands") or []
+        if safe_top_brands:
+            for row in safe_top_brands:
                 lines.append(
                     f"- `{row.get('candidate_brand')}`: `{row.get('count')}`"
                 )

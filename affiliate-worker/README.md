@@ -90,6 +90,20 @@ Implemented in PR10:
   `SAFE_INSERT_CANDIDATE` rows;
 - no automatic promotion into `public.perfumes`.
 
+Implemented in PR13:
+
+- `run-affiliate-pipeline` now continues after `create-candidates` with
+  `sync-perfume-insert-candidates`;
+- the same daily pipeline also runs `refresh-product-match-candidates` in
+  `--dry-run` mode only, for reporting and diagnostics;
+- aggregate pipeline reports now include staging sync metrics, refresh dry-run
+  metrics, `perfume_insert_candidates` counts, SAFE top brands, and generated
+  JSON/Markdown/CSV paths;
+- optional Awin-specific email reporting, separate from the server-backup/restic
+  email flow;
+- no automatic acceptance, no automatic `public.offers` apply, and no automatic
+  promotion into `public.perfumes`.
+
 Not implemented yet:
 
 - product variants;
@@ -128,7 +142,8 @@ python -m app.main create-candidates --advertiser 105475 --feed-id 97867
 python -m app.main sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --dry-run
 python -m app.main sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --report-dir /data/reports
 python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --dry-run
-python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867
+python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --skip-refresh-dry-run
+python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --email-report
 python -m app.main run-affiliate-pipeline --network awin --random-delay-max-seconds 300
 python -m app.main inspect-db
 python -m app.main migrate-db --plan
@@ -188,20 +203,23 @@ affiliate `offers`. It creates or updates `product_match_candidates` for
 optionally include excluded rows as `needs_review`, `rejected_not_perfume`, or
 `ignored` candidates depending on the exclusion reason.
 
-For PR09, `run-affiliate-pipeline` orchestrates the existing commands in this
+For PR09 and PR13, `run-affiliate-pipeline` orchestrates these commands in this
 order for each active feed in the database:
 
 1. `import-feeds --raw-stage-only`
 2. `normalize-feed`
 3. `match-offers`
 4. `create-candidates`
+5. `sync-perfume-insert-candidates`
+6. `refresh-product-match-candidates --dry-run`
 
 By default it processes all active feeds for the selected network. Use
 `--advertiser` and `--feed-id` to restrict the run to one feed.
 
-Dry-run still executes all four stages in non-mutating mode and writes an
-aggregate report, but it does not insert raw rows, normalized rows, offers, or
-candidates. The matching stage also forces `--no-stale-update` during dry-run.
+Dry-run still executes all six stages in non-mutating mode and writes an
+aggregate report, but it does not insert raw rows, normalized rows, offers,
+candidates, or staging rows. The matching stage also forces `--no-stale-update`
+during dry-run.
 
 The orchestration command acquires a PostgreSQL advisory lock first. If another
 run already holds the lock, the worker writes a `skipped_locked` report and
@@ -221,6 +239,12 @@ Aggregate pipeline reports are written as:
 
 The latest report is a copied JSON file instead of a symlink so it works
 cleanly on the Docker bind mount used on the VPS.
+
+The pipeline-level sync step is blocking: if `sync-perfume-insert-candidates`
+fails, `run-affiliate-pipeline` fails. The refresh step is intentionally
+non-blocking because it is dry-run only; if the refresh diagnostic fails, the
+pipeline stays successful but records a warning and a failed refresh step in the
+aggregate report.
 
 For PR10, `sync-perfume-insert-candidates` reads open
 `product_match_candidates` rows for one advertiser/feed and syncs them into the
@@ -296,11 +320,53 @@ The command:
 Recommended daily workflow:
 
 1. Run `run-affiliate-pipeline`.
-2. Run `sync-perfume-insert-candidates`.
-3. Review the Markdown report and SAFE CSV output.
+2. Review the aggregate report, the sync Markdown report, and the SAFE CSV output.
+3. Inspect the refresh dry-run report for historical open candidates that became matchable.
 4. Approve candidates manually in CIS staging.
-5. Promote approved rows later with the SQL plan from
+5. Apply reviewed candidates manually if needed.
+6. Promote approved rows later with the SQL plan from
    `promote_approved_perfume_insert_candidates.sql`.
+
+`run-affiliate-pipeline` never calls
+`apply-reviewed-product-match-candidates`. That step stays manual and
+controlled.
+
+## Awin email reporting
+
+The affiliate worker can send a dedicated plain-text email for the Awin daily
+pipeline. This is separate from the server-backup/restic email flow.
+
+Supported environment variables:
+
+- `AFFILIATE_EMAIL_REPORT_ENABLED`
+- `AFFILIATE_EMAIL_REPORT_TO`
+- `AFFILIATE_EMAIL_REPORT_FROM`
+- `AFFILIATE_EMAIL_REPORT_SUBJECT_PREFIX`
+- `AFFILIATE_EMAIL_REPORT_SEND_ON_SUCCESS`
+- `AFFILIATE_EMAIL_REPORT_SEND_ON_FAILURE`
+- `AFFILIATE_EMAIL_REPORT_COMMAND`
+
+Behavior:
+
+- email reporting is disabled by default;
+- `AFFILIATE_EMAIL_REPORT_COMMAND` supports `sendmail` or `mail`;
+- `--email-report` forces an email attempt for the current run;
+- `--no-email-report` suppresses email even if the environment enables it;
+- failure emails can be sent even when a pipeline stage fails;
+- email delivery errors are reported as warnings and do not trigger any write to
+  `public.perfumes` or automatic apply actions.
+
+Example environment:
+
+```bash
+AFFILIATE_EMAIL_REPORT_ENABLED="true"
+AFFILIATE_EMAIL_REPORT_TO="ops@example.net"
+AFFILIATE_EMAIL_REPORT_FROM="awin-worker@example.net"
+AFFILIATE_EMAIL_REPORT_SUBJECT_PREFIX="[Awin]"
+AFFILIATE_EMAIL_REPORT_SEND_ON_SUCCESS="true"
+AFFILIATE_EMAIL_REPORT_SEND_ON_FAILURE="true"
+AFFILIATE_EMAIL_REPORT_COMMAND="sendmail"
+```
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
 
@@ -363,6 +429,8 @@ docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-work
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker apply-reviewed-product-match-candidates --advertiser 105475 --feed-id 97867 --brand MONTALE --status accepted_existing_perfume --report-dir /data/reports/daily
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --skip-refresh-dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --email-report
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-feeds --network awin --raw-stage-only --advertiser 105475 --feed-id 97867
