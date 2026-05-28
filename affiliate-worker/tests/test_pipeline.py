@@ -562,6 +562,30 @@ def test_pipeline_skips_when_lock_is_already_held(tmp_path: Path) -> None:
     assert candidates.refresh_calls == []
 
 
+def test_pipeline_succeeds_when_no_active_feeds_match_selection(tmp_path: Path) -> None:
+    settings, _ = prepare_pipeline_database(tmp_path)
+    service, raw, normalization, matching, candidates, _ = build_pipeline_service(
+        settings
+    )
+
+    result = service.run_pipeline(
+        network="awin",
+        advertiser_id="missing-advertiser",
+        dry_run=True,
+    )
+
+    assert result.exit_code == 0
+    assert result.report["status"] == "success"
+    assert result.report["feeds_total"] == 0
+    assert result.report["warnings"] == ["No active affiliate feeds matched the selection."]
+    assert raw.calls == []
+    assert normalization.calls == []
+    assert matching.calls == []
+    assert candidates.create_calls == []
+    assert candidates.sync_calls == []
+    assert candidates.refresh_calls == []
+
+
 def test_pipeline_raw_import_failure_skips_downstream_and_returns_non_zero(
     tmp_path: Path,
 ) -> None:

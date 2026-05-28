@@ -349,7 +349,12 @@ class PipelineService:
                 report["warnings"].append(
                     "Another affiliate pipeline run is already active; skipping."
                 )
-                return self._finalize_result(report, started_at, exit_code=2)
+                return self._finalize_result(
+                    report,
+                    started_at,
+                    exit_code=2,
+                    email_report=email_report,
+                )
 
             with self.db_service.connect() as conn:
                 feeds = self._load_active_feeds(
@@ -363,7 +368,12 @@ class PipelineService:
             if not feeds:
                 report["status"] = "success"
                 report["warnings"].append("No active affiliate feeds matched the selection.")
-                return self._finalize_result(report, started_at, exit_code=0)
+                return self._finalize_result(
+                    report,
+                    started_at,
+                    exit_code=0,
+                    email_report=email_report,
+                )
 
             for feed in feeds:
                 feed_result = self._process_feed(
