@@ -6,7 +6,8 @@ Requires=docker.service
 [Service]
 Type=oneshot
 WorkingDirectory=/home/eva/mes-fragrances
-ExecStart=/usr/bin/docker run --rm --network mes-fragrances_cis_default --env-file /home/eva/mes-fragrances/affiliate-worker/.env -v /home/eva/mes-fragrances/affiliate-worker-data:/data mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin
+EnvironmentFile=-/home/eva/mes-fragrances/affiliate-worker/.host-email-report.env
+ExecStart=/home/eva/mes-fragrances/affiliate-worker/deploy/run_daily_affiliate_pipeline.sh
 StandardOutput=journal
 StandardError=journal
 

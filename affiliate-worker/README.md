@@ -101,6 +101,8 @@ Implemented in PR13:
   JSON/Markdown/CSV paths;
 - optional Awin-specific email reporting, separate from the server-backup/restic
   email flow;
+- a host-side wrapper for daily VPS execution so Awin email can use host
+  `sendmail` even when the worker container has no mail binary;
 - no automatic acceptance, no automatic `public.offers` apply, and no automatic
   promotion into `public.perfumes`.
 
@@ -336,6 +338,16 @@ controlled.
 The affiliate worker can send a dedicated plain-text email for the Awin daily
 pipeline. This is separate from the server-backup/restic email flow.
 
+For local development or custom images that already include a mailer, the
+container-level email settings below still work.
+
+On the VPS, keep container email disabled if the image does not include
+`sendmail` or `mail`. The recommended production setup is the host wrapper
+script at
+[run_daily_affiliate_pipeline.sh](/home/eva/mes-fragrances/affiliate-worker/deploy/run_daily_affiliate_pipeline.sh),
+which runs the container with `--no-email-report` and sends the summary email
+from the host after the Docker command finishes.
+
 Supported environment variables:
 
 - `AFFILIATE_EMAIL_REPORT_ENABLED`
@@ -356,7 +368,7 @@ Behavior:
 - email delivery errors are reported as warnings and do not trigger any write to
   `public.perfumes` or automatic apply actions.
 
-Example environment:
+Example container environment:
 
 ```bash
 AFFILIATE_EMAIL_REPORT_ENABLED="true"
@@ -365,7 +377,48 @@ AFFILIATE_EMAIL_REPORT_FROM="awin-worker@example.net"
 AFFILIATE_EMAIL_REPORT_SUBJECT_PREFIX="[Awin]"
 AFFILIATE_EMAIL_REPORT_SEND_ON_SUCCESS="true"
 AFFILIATE_EMAIL_REPORT_SEND_ON_FAILURE="true"
-AFFILIATE_EMAIL_REPORT_COMMAND="sendmail"
+AFFILIATE_EMAIL_REPORT_COMMAND=sendmail
+```
+
+Recommended VPS setting when using the host wrapper:
+
+```bash
+AFFILIATE_EMAIL_REPORT_ENABLED=false
+```
+
+### Host email wrapper
+
+The host wrapper sends the Awin daily email outside the container so it can
+reuse the host MTA already used by the backup/restic stack.
+
+Supported host environment variables:
+
+- `AFFILIATE_HOST_EMAIL_REPORT_ENABLED`
+- `AFFILIATE_HOST_EMAIL_REPORT_TO`
+- `AFFILIATE_HOST_EMAIL_REPORT_FROM`
+- `AFFILIATE_HOST_EMAIL_REPORT_SUBJECT_PREFIX`
+- `AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_SUCCESS`
+- `AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_FAILURE`
+- `AFFILIATE_HOST_EMAIL_REPORT_COMMAND`
+
+Default behavior:
+
+- host email is disabled unless explicitly enabled;
+- `AFFILIATE_HOST_EMAIL_REPORT_COMMAND` defaults to `sendmail`;
+- the wrapper always runs the worker container with `--no-email-report`;
+- the wrapper returns the original pipeline exit code even if email delivery
+  fails.
+
+Example host env file:
+
+```bash
+AFFILIATE_HOST_EMAIL_REPORT_ENABLED=true
+AFFILIATE_HOST_EMAIL_REPORT_TO=ops@example.net
+AFFILIATE_HOST_EMAIL_REPORT_FROM=awin-worker@example.net
+AFFILIATE_HOST_EMAIL_REPORT_SUBJECT_PREFIX=[Awin]
+AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_SUCCESS=true
+AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_FAILURE=true
+AFFILIATE_HOST_EMAIL_REPORT_COMMAND=sendmail
 ```
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
@@ -443,7 +496,27 @@ For daily VPS execution, PR09 recommends a host `systemd` timer that runs
 
 - [mes-fragrances-affiliate-worker.service](/home/eva/mes-fragrances/affiliate-worker/deploy/systemd/mes-fragrances-affiliate-worker.service)
 - [mes-fragrances-affiliate-worker.timer](/home/eva/mes-fragrances/affiliate-worker/deploy/systemd/mes-fragrances-affiliate-worker.timer)
+- [run_daily_affiliate_pipeline.sh](/home/eva/mes-fragrances/affiliate-worker/deploy/run_daily_affiliate_pipeline.sh)
 - [affiliate_worker_operations.md](/home/eva/mes-fragrances/docs/prd/affiliate-system/30_operations/affiliate_worker_operations.md)
+
+Recommended deployment procedure for the host wrapper:
+
+1. Keep `AFFILIATE_EMAIL_REPORT_ENABLED=false` in `affiliate-worker/.env`.
+2. Create or update a host env file such as
+   `/home/eva/mes-fragrances/affiliate-worker/.host-email-report.env` with the
+   `AFFILIATE_HOST_EMAIL_REPORT_*` variables.
+3. Copy the updated service template from the repo to `/etc/systemd/system/`.
+4. Run `systemctl daemon-reload`.
+5. Restart the service or timer if required by your change window.
+6. Test the wrapper manually:
+
+```bash
+/home/eva/mes-fragrances/affiliate-worker/deploy/run_daily_affiliate_pipeline.sh
+```
+
+The wrapper reads `latest_affiliate_pipeline_report.json`, sends a plain-text
+summary through host `sendmail`, and never calls
+`apply-reviewed-product-match-candidates`.
 
 Before the first non-dry-run `migrate-db` on the VPS, take a backup:
 
