@@ -456,6 +456,88 @@ def perfume_id_by_name(database_url: str, name: str) -> str:
         )
 
 
+def insert_raw_feed_item_fixture(
+    database_url: str,
+    *,
+    advertiser_id: str = "105475",
+    feed_id: str = "97867",
+    network_product_id: str | None,
+    merchant_product_id: str | None,
+    raw_payload: dict[str, object],
+) -> int:
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        import_run_id = conn.execute(
+            """
+            select fir.id
+            from feed_import_runs fir
+            join affiliate_feeds af on af.id = fir.feed_id
+            where af.network = 'awin'
+              and af.network_feed_id = %s
+            order by fir.id desc
+            limit 1
+            """,
+            (feed_id,),
+        ).fetchone()
+        if import_run_id is None:
+            feed_row = conn.execute(
+                """
+                select af.id
+                from affiliate_feeds af
+                join advertisers a on a.id = af.advertiser_id
+                where af.network = 'awin'
+                  and af.network_feed_id = %s
+                  and a.network = 'awin'
+                  and a.network_advertiser_id = %s
+                order by af.id desc
+                limit 1
+                """,
+                (feed_id, advertiser_id),
+            ).fetchone()
+            assert feed_row is not None
+            import_run_id = conn.execute(
+                """
+                insert into feed_import_runs (
+                    feed_id,
+                    status,
+                    rows_total,
+                    rows_filtered,
+                    rows_matched,
+                    rows_candidates,
+                    rows_errors,
+                    metadata
+                )
+                values (%s, 'success', 0, 0, 0, 0, 0, '{}'::jsonb)
+                returning id
+                """,
+                (int(feed_row[0]),),
+            ).fetchone()
+        return int(
+            conn.execute(
+                """
+                insert into raw_feed_items (
+                    import_run_id,
+                    advertiser_id,
+                    network,
+                    network_product_id,
+                    merchant_product_id,
+                    raw_payload,
+                    raw_hash
+                )
+                values (%s, %s, 'awin', %s, %s, %s, %s)
+                returning id
+                """,
+                (
+                    int(import_run_id[0]),
+                    advertiser_db_id(database_url, advertiser_id),
+                    network_product_id,
+                    merchant_product_id,
+                    Jsonb(raw_payload),
+                    f"reviewed-raw-{uuid4()}",
+                ),
+            ).fetchone()[0]
+        )
+
+
 def insert_reviewed_candidate(
     database_url: str,
     *,
@@ -480,6 +562,25 @@ def insert_reviewed_candidate(
     if match_score is None:
         match_score = Decimal("97.00")
 
+    raw_payload = {
+        "title": candidate_name,
+        "affiliate_url": affiliate_url,
+        "merchant_product_id": merchant_product_id,
+        "network_product_id": network_product_id,
+        "merchant_url": merchant_url,
+        "image_url": image_url,
+        "price": price,
+        "currency": currency,
+        "ean": ean,
+        "mpn": mpn,
+    }
+    raw_feed_item_id = insert_raw_feed_item_fixture(
+        database_url,
+        advertiser_id=advertiser_id,
+        network_product_id=network_product_id,
+        merchant_product_id=merchant_product_id,
+        raw_payload=raw_payload,
+    )
     enrichment_payload = {
         "network": "awin",
         "network_feed_id": "97867",
@@ -496,12 +597,7 @@ def insert_reviewed_candidate(
         "mpn": mpn,
         "delivery_cost": "0",
         "match_method": "reviewed_candidate",
-        "raw_payload": {
-            "title": candidate_name,
-            "affiliate_url": affiliate_url,
-            "merchant_product_id": merchant_product_id,
-            "network_product_id": network_product_id,
-        },
+        "raw_payload": raw_payload,
     }
     with psycopg.connect(database_url, autocommit=True) as conn:
         candidate_id = conn.execute(
@@ -532,7 +628,7 @@ def insert_reviewed_candidate(
             """,
             (
                 advertiser_db_id(database_url, advertiser_id),
-                9000,
+                raw_feed_item_id,
                 candidate_brand,
                 candidate_name,
                 image_url,
