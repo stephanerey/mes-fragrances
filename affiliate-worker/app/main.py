@@ -9,6 +9,7 @@ from app.awin import AwinCommandError, AwinService, format_report_summary
 from app.candidates import (
     CandidateError,
     CandidateService,
+    format_apply_reviewed_candidate_summary,
     format_candidate_report_summary,
     format_insert_candidate_sync_summary,
     format_refresh_candidate_summary,
@@ -139,6 +140,23 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_candidates.add_argument("--only-status", default="pending,needs_review")
     refresh_candidates.add_argument("--brand")
     refresh_candidates.add_argument("--min-score", type=int)
+
+    apply_reviewed_candidates = subparsers.add_parser(
+        "apply-reviewed-product-match-candidates",
+        help=(
+            "Create or refresh public.offers from reviewed product_match_candidates "
+            "without touching perfumes."
+        ),
+    )
+    apply_reviewed_candidates.add_argument("--advertiser", required=True)
+    apply_reviewed_candidates.add_argument("--feed-id", required=True)
+    apply_reviewed_candidates.add_argument("--status", default="accepted_existing_perfume")
+    apply_reviewed_candidates.add_argument("--brand")
+    apply_reviewed_candidates.add_argument("--limit", type=int)
+    apply_reviewed_candidates.add_argument("--dry-run", action="store_true")
+    apply_reviewed_candidates.add_argument("--report-dir", type=Path)
+    apply_reviewed_candidates.add_argument("--min-score", type=int)
+    apply_reviewed_candidates.add_argument("--allow-needs-review", action="store_true")
 
     run_pipeline = subparsers.add_parser(
         "run-affiliate-pipeline",
@@ -346,6 +364,26 @@ def run_refresh_product_match_candidates(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_apply_reviewed_product_match_candidates(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    statuses = [status.strip() for status in str(args.status).split(",") if status.strip()]
+    if not statuses:
+        raise CandidateError("--status must contain at least one status")
+    report, report_path = CandidateService(settings).apply_reviewed_product_match_candidates(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        dry_run=args.dry_run,
+        limit=args.limit,
+        report_dir=args.report_dir,
+        statuses=statuses,
+        brand=str(args.brand) if args.brand is not None else None,
+        min_score=args.min_score,
+        allow_needs_review=args.allow_needs_review,
+    )
+    print(format_apply_reviewed_candidate_summary(report, report_path))
+    return 0
+
+
 def run_affiliate_pipeline(args: argparse.Namespace) -> int:
     settings = get_settings()
     result = PipelineService(settings).run_pipeline(
@@ -408,6 +446,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_sync_perfume_insert_candidates(args)
         if args.command == "refresh-product-match-candidates":
             return run_refresh_product_match_candidates(args)
+        if args.command == "apply-reviewed-product-match-candidates":
+            return run_apply_reviewed_product_match_candidates(args)
         if args.command == "run-affiliate-pipeline":
             return run_affiliate_pipeline(args)
         if args.command == "inspect-db":

@@ -128,6 +128,14 @@ class LoadedNormalizedItem:
     match_key: str
 
 
+@dataclass(frozen=True)
+class OfferUpsertPlan:
+    action: str
+    price_changed: bool
+    merged_metadata: dict[str, object]
+    changed_fields: bool
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -1138,16 +1146,12 @@ class MatchingService:
             network_product_id=item.network_product_id,
             merchant_product_id=item.merchant_product_id,
         )
-        metadata = {
-            "feed_id": item.feed_id,
-            "network_feed_id": network_feed_id,
-            "normalized_feed_item_id": item.id,
-            "raw_feed_item_id": item.raw_feed_item_id,
-            "match_reason": match_result.match_reason,
-            "match_components": match_result.match_components,
-            "source": "pr07",
-        }
-        price_changed = False
+        plan = self._plan_offer_upsert(
+            existing_offer=existing_offer,
+            item=item,
+            network_feed_id=network_feed_id,
+            match_result=match_result,
+        )
 
         if existing_offer is None:
             conn.execute(
@@ -1202,42 +1206,10 @@ class MatchingService:
                     Decimal(str(match_result.score)),
                     match_result.method,
                     Jsonb(item.raw_payload),
-                    Jsonb(metadata),
+                    Jsonb(plan.merged_metadata),
                 ),
             )
-            return "inserted", True
-
-        previous_price = existing_offer["price"]
-        price_changed = previous_price != item.price
-        existing_metadata = dict(existing_offer["metadata"])
-        merged_metadata = {**existing_metadata, **metadata}
-        changed_fields = any(
-            [
-                (
-                    str(existing_offer["perfume_id"])
-                    if existing_offer["perfume_id"] is not None
-                    else None
-                )
-                != match_result.perfume_id,
-                existing_offer["title"] != item.title,
-                existing_offer["description"] != item.description,
-                existing_offer["price"] != item.price,
-                existing_offer["currency"] != (item.currency or "EUR"),
-                existing_offer["delivery_cost"] != item.delivery_cost,
-                existing_offer["affiliate_url"] != item.affiliate_url,
-                existing_offer["merchant_url"] != item.merchant_url,
-                existing_offer["image_url"] != item.image_url,
-                existing_offer["in_stock"] != item.in_stock,
-                existing_offer["stock_status"] != item.stock_status,
-                dict(existing_offer["raw_payload"]) != item.raw_payload,
-                dict(existing_offer["metadata"]) != merged_metadata,
-                existing_offer["match_status"] != match_result.status,
-                float(existing_offer["match_score"] or 0) != match_result.score,
-                existing_offer["match_method"] != match_result.method,
-                existing_offer["active"] is not True,
-                int(existing_offer["missed_imports"] or 0) != 0,
-            ]
-        )
+            return plan.action, plan.price_changed
 
         conn.execute(
             """
@@ -1291,11 +1263,92 @@ class MatchingService:
                 Decimal(str(match_result.score)),
                 match_result.method,
                 Jsonb(item.raw_payload),
-                Jsonb(merged_metadata),
+                Jsonb(plan.merged_metadata),
                 existing_offer["id"],
             ),
         )
-        return ("updated" if changed_fields else "unchanged"), price_changed
+        return plan.action, plan.price_changed
+
+    def _build_offer_metadata(
+        self,
+        *,
+        item: LoadedNormalizedItem,
+        network_feed_id: str,
+        match_result: MatchResult,
+    ) -> dict[str, object]:
+        metadata_source = (
+            "reviewed_candidate"
+            if match_result.method == "reviewed_candidate"
+            else "pr07"
+        )
+        return {
+            "feed_id": item.feed_id,
+            "network_feed_id": network_feed_id,
+            "normalized_feed_item_id": item.id,
+            "raw_feed_item_id": item.raw_feed_item_id,
+            "match_reason": match_result.match_reason,
+            "match_components": match_result.match_components,
+            "source": metadata_source,
+        }
+
+    def _plan_offer_upsert(
+        self,
+        *,
+        existing_offer: dict[str, object] | None,
+        item: LoadedNormalizedItem,
+        network_feed_id: str,
+        match_result: MatchResult,
+    ) -> OfferUpsertPlan:
+        metadata = self._build_offer_metadata(
+            item=item,
+            network_feed_id=network_feed_id,
+            match_result=match_result,
+        )
+        if existing_offer is None:
+            return OfferUpsertPlan(
+                action="inserted",
+                price_changed=True,
+                merged_metadata=metadata,
+                changed_fields=True,
+            )
+
+        price_changed = existing_offer["price"] != item.price
+        existing_metadata = dict(existing_offer["metadata"] or {})
+        merged_metadata = {**existing_metadata, **metadata}
+        existing_raw_payload = dict(existing_offer["raw_payload"] or {})
+        changed_fields = any(
+            [
+                (
+                    str(existing_offer["perfume_id"])
+                    if existing_offer["perfume_id"] is not None
+                    else None
+                )
+                != match_result.perfume_id,
+                existing_offer["title"] != item.title,
+                existing_offer["description"] != item.description,
+                existing_offer["price"] != item.price,
+                existing_offer["currency"] != (item.currency or "EUR"),
+                existing_offer["delivery_cost"] != item.delivery_cost,
+                existing_offer["affiliate_url"] != item.affiliate_url,
+                existing_offer["merchant_url"] != item.merchant_url,
+                existing_offer["image_url"] != item.image_url,
+                existing_offer["in_stock"] != item.in_stock,
+                existing_offer["stock_status"] != item.stock_status,
+                existing_raw_payload != item.raw_payload,
+                existing_metadata != merged_metadata,
+                existing_offer["match_status"] != match_result.status,
+                float(existing_offer["match_score"] or 0) != match_result.score,
+                existing_offer["match_method"] != match_result.method,
+                existing_offer["active"] is not True,
+                int(existing_offer["missed_imports"] or 0) != 0,
+            ]
+        )
+        return OfferUpsertPlan(
+            action="updated" if changed_fields else "unchanged",
+            price_changed=price_changed,
+            merged_metadata=merged_metadata,
+            changed_fields=changed_fields,
+        )
 
     def _update_stale_offers(
         self,

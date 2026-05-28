@@ -3,14 +3,16 @@ from __future__ import annotations
 import csv
 import os
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from io import StringIO
 from pathlib import Path
 from uuid import uuid4
 
 import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 
-from app.candidates import CandidateService
+from app.candidates import CandidateError, CandidateService
 from app.config import Settings
 from app.db import DatabaseService
 from app.normalization import NormalizationService
@@ -436,6 +438,114 @@ def advertiser_db_id(database_url: str, advertiser_id: str = "105475") -> int:
                 (advertiser_id,),
             ).fetchone()[0]
         )
+
+
+def perfume_id_by_name(database_url: str, name: str) -> str:
+    with psycopg.connect(database_url) as conn:
+        return str(
+            conn.execute(
+                """
+                select id
+                from perfumes
+                where name = %s
+                order by id
+                limit 1
+                """,
+                (name,),
+            ).fetchone()[0]
+        )
+
+
+def insert_reviewed_candidate(
+    database_url: str,
+    *,
+    advertiser_id: str = "105475",
+    status: str = "accepted_existing_perfume",
+    proposed_perfume_id: str | None,
+    candidate_brand: str = "Lancome",
+    candidate_name: str = "La Vie Est Belle Eau de Parfum 50 ml",
+    network_product_id: str | None = "aw-1",
+    merchant_product_id: str | None = "sku-1",
+    affiliate_url: str | None = "https://awin.test/reviewed-1",
+    merchant_url: str | None = "https://merchant.test/reviewed-1",
+    image_url: str | None = "https://merchant.test/reviewed-1.jpg",
+    price: str | None = "79.90",
+    currency: str | None = "EUR",
+    ean: str | None = "111",
+    mpn: str | None = "LVB-50",
+    match_score: Decimal | None = None,
+    match_reason: str = "Manual review accepted.",
+    dedupe_key: str | None = None,
+) -> int:
+    if match_score is None:
+        match_score = Decimal("97.00")
+
+    enrichment_payload = {
+        "network": "awin",
+        "network_feed_id": "97867",
+        "network_product_id": network_product_id,
+        "merchant_product_id": merchant_product_id,
+        "affiliate_url": affiliate_url,
+        "merchant_url": merchant_url,
+        "image_url": image_url,
+        "price": price,
+        "currency": currency,
+        "title": candidate_name,
+        "description": f"{candidate_name} description",
+        "ean": ean,
+        "mpn": mpn,
+        "delivery_cost": "0",
+        "match_method": "reviewed_candidate",
+        "raw_payload": {
+            "title": candidate_name,
+            "affiliate_url": affiliate_url,
+            "merchant_product_id": merchant_product_id,
+            "network_product_id": network_product_id,
+        },
+    }
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        candidate_id = conn.execute(
+            """
+            insert into product_match_candidates (
+                advertiser_id,
+                raw_feed_item_id,
+                candidate_brand,
+                candidate_name,
+                candidate_concentration,
+                candidate_volume_ml,
+                candidate_category,
+                candidate_image_url,
+                candidate_url,
+                proposed_perfume_id,
+                match_score,
+                match_reason,
+                status,
+                source_count,
+                advertiser_count,
+                enrichment_payload,
+                dedupe_key
+            )
+            values (
+                %s, %s, %s, %s, 'edp', 50.00, 'Fragrance', %s, %s, %s, %s, %s, %s, 1, 1, %s, %s
+            )
+            returning id
+            """,
+            (
+                advertiser_db_id(database_url, advertiser_id),
+                9000,
+                candidate_brand,
+                candidate_name,
+                image_url,
+                affiliate_url,
+                proposed_perfume_id,
+                match_score,
+                match_reason,
+                status,
+                Jsonb(enrichment_payload),
+                dedupe_key or f"reviewed-{uuid4()}",
+            ),
+        ).fetchone()[0]
+    return int(candidate_id)
 
 
 def test_unmatched_fragrance_creates_candidate(tmp_path: Path) -> None:
@@ -1337,3 +1447,214 @@ def test_refresh_product_match_candidates_without_match_stays_unchanged(
     assert report["candidates_without_match"] >= 1
     assert report_path.exists()
     assert row == ("pending", None)
+
+
+def test_apply_reviewed_candidates_dry_run_does_not_write_offers(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    insert_reviewed_candidate(
+        database_url,
+        proposed_perfume_id=perfume_id_by_name(database_url, "La Vie Est Belle"),
+    )
+
+    report, report_path = CandidateService(settings).apply_reviewed_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        offers = conn.execute("select count(*) from offers").fetchone()[0]
+
+    assert report["offers_inserted"] == 1
+    assert report["candidates_applied"] == 1
+    assert report_path.exists()
+    assert offers == 0
+
+
+def test_apply_reviewed_candidates_needs_review_ignored_by_default(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    insert_reviewed_candidate(
+        database_url,
+        status="needs_review",
+        proposed_perfume_id=perfume_id_by_name(database_url, "La Vie Est Belle"),
+    )
+
+    report, _ = CandidateService(settings).apply_reviewed_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=True,
+    )
+
+    assert report["candidates_loaded"] == 0
+    assert report["offers_inserted"] == 0
+
+
+def test_apply_reviewed_candidates_needs_review_requires_allow_flag(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    insert_reviewed_candidate(
+        database_url,
+        status="needs_review",
+        proposed_perfume_id=perfume_id_by_name(database_url, "La Vie Est Belle"),
+    )
+
+    with pytest.raises(CandidateError, match="allow-needs-review"):
+        CandidateService(settings).apply_reviewed_product_match_candidates(
+            advertiser_id="105475",
+            feed_id="97867",
+            dry_run=True,
+            statuses=["needs_review"],
+        )
+
+
+def test_apply_reviewed_candidates_needs_review_allowed_creates_offer(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    perfume_id = perfume_id_by_name(database_url, "La Vie Est Belle")
+    insert_reviewed_candidate(
+        database_url,
+        status="needs_review",
+        proposed_perfume_id=perfume_id,
+        network_product_id="aw-needs-review",
+        merchant_product_id="sku-needs-review",
+    )
+
+    report, _ = CandidateService(settings).apply_reviewed_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+        statuses=["needs_review"],
+        allow_needs_review=True,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select perfume_id, match_status, match_method
+            from offers
+            where network_product_id = 'aw-needs-review'
+            """
+        ).fetchone()
+
+    assert report["offers_inserted"] == 1
+    assert str(row[0]) == perfume_id
+    assert row[1] == "matched_reviewed_candidate"
+    assert row[2] == "reviewed_candidate"
+
+
+def test_apply_reviewed_candidates_upserts_existing_offer(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    service = CandidateService(settings)
+    candidate_id = insert_reviewed_candidate(
+        database_url,
+        proposed_perfume_id=perfume_id_by_name(database_url, "La Vie Est Belle"),
+        network_product_id="aw-upsert",
+        merchant_product_id="sku-upsert",
+    )
+
+    first_report, _ = service.apply_reviewed_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        enrichment = conn.execute(
+            """
+            select enrichment_payload
+            from product_match_candidates
+            where id = %s
+            """,
+            (candidate_id,),
+        ).fetchone()[0]
+        payload = dict(enrichment)
+        payload["price"] = "89.90"
+        conn.execute(
+            """
+            update product_match_candidates
+            set enrichment_payload = %s,
+                match_score = 99.00
+            where id = %s
+            """,
+            (Jsonb(payload), candidate_id),
+        )
+
+    second_report, _ = service.apply_reviewed_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            """
+            select price, metadata ->> 'source'
+            from offers
+            where network_product_id = 'aw-upsert'
+            """
+        ).fetchone()
+
+    assert first_report["offers_inserted"] == 1
+    assert second_report["offers_updated"] == 1
+    assert row == (Decimal("89.90"), "reviewed_candidate")
+
+
+def test_apply_reviewed_candidates_skips_missing_external_id(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    insert_reviewed_candidate(
+        database_url,
+        proposed_perfume_id=perfume_id_by_name(database_url, "La Vie Est Belle"),
+        network_product_id=None,
+        merchant_product_id=None,
+    )
+
+    report, _ = CandidateService(settings).apply_reviewed_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        offers = conn.execute("select count(*) from offers").fetchone()[0]
+
+    assert report["skipped_missing_external_id"] == 1
+    assert offers == 0
+
+
+def test_apply_reviewed_candidates_skips_missing_payload_and_does_not_touch_perfumes(
+    tmp_path: Path,
+) -> None:
+    settings, database_url = prepare_candidate_database(tmp_path)
+    insert_reviewed_candidate(
+        database_url,
+        proposed_perfume_id=perfume_id_by_name(database_url, "La Vie Est Belle"),
+        affiliate_url=None,
+        price=None,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        perfumes_before = conn.execute("select count(*) from perfumes").fetchone()[0]
+
+    report, _ = CandidateService(settings).apply_reviewed_product_match_candidates(
+        advertiser_id="105475",
+        feed_id="97867",
+        dry_run=False,
+    )
+
+    with psycopg.connect(database_url) as conn:
+        offers = conn.execute("select count(*) from offers").fetchone()[0]
+        perfumes_after = conn.execute("select count(*) from perfumes").fetchone()[0]
+
+    assert report["skipped_missing_payload"] == 1
+    assert offers == 0
+    assert perfumes_before == perfumes_after

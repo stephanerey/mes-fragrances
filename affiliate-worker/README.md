@@ -268,6 +268,31 @@ The command:
 - keeps the workflow conservative by moving refreshed matches to `needs_review`;
 - supports `--brand`, `--limit`, `--only-status`, `--min-score`, and `--report-dir`.
 
+For PR12, `apply-reviewed-product-match-candidates` consumes reviewed
+`product_match_candidates` rows and creates or updates `public.offers` from
+their historical payloads.
+
+It is intended for batches where a human has already validated the candidate
+and the worker only needs to materialize the affiliate offer row.
+
+Example usage:
+
+```bash
+python -m app.main apply-reviewed-product-match-candidates --advertiser 105475 --feed-id 97867 --dry-run
+python -m app.main apply-reviewed-product-match-candidates --advertiser 105475 --feed-id 97867 --brand MONTALE --status accepted_existing_perfume --report-dir /data/reports/daily
+python -m app.main apply-reviewed-product-match-candidates --advertiser 105475 --feed-id 97867 --brand MONTALE --status needs_review --allow-needs-review --dry-run
+```
+
+The command:
+
+- reads only `product_match_candidates`;
+- writes only `public.offers` unless `--dry-run` is used;
+- never writes to `public.perfumes`;
+- defaults to `status=accepted_existing_perfume`;
+- refuses `needs_review` unless `--allow-needs-review` is passed explicitly;
+- skips candidates with missing external ids or incomplete offer payloads;
+- reuses the existing offer upsert logic from `match-offers`.
+
 Recommended daily workflow:
 
 1. Run `run-affiliate-pipeline`.
@@ -334,6 +359,8 @@ docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-work
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker sync-perfume-insert-candidates --advertiser 105475 --feed-id 97867 --report-dir /data/reports/daily
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker refresh-product-match-candidates --advertiser 105475 --feed-id 97867 --brand MONTALE --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker refresh-product-match-candidates --advertiser 105475 --feed-id 97867 --report-dir /data/reports/daily
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker apply-reviewed-product-match-candidates --advertiser 105475 --feed-id 97867 --dry-run
+docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker apply-reviewed-product-match-candidates --advertiser 105475 --feed-id 97867 --brand MONTALE --status accepted_existing_perfume --report-dir /data/reports/daily
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --dry-run
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867
 docker run --rm --network mes-fragrances_cis_default --env-file ./affiliate-worker/.env -v "$(pwd)/affiliate-worker-data:/data" mes-fragrances-affiliate-worker import-local-csv --advertiser 105475 --feed-id 97867 --path /data/feeds/comas.csv --dry-run
