@@ -16,6 +16,7 @@ from app.db import DatabaseService
 from app.matching import (
     CatalogPerfume,
     LoadedNormalizedItem,
+    MatchingError,
     MatchingService,
     MatchResult,
     build_perfume_match_key,
@@ -42,6 +43,11 @@ STAGING_FINAL_REVIEW_STATUSES = {
     "rejected",
     "merged_existing",
     "needs_more_info",
+}
+APPLY_REVIEWED_DEFAULT_STATUSES = {"accepted_existing_perfume"}
+APPLY_REVIEWED_ALLOW_NEEDS_REVIEW_STATUSES = {
+    "accepted_existing_perfume",
+    "needs_review",
 }
 SAFE_INSERT_CANDIDATE = "SAFE_INSERT_CANDIDATE"
 NEEDS_MANUAL_REVIEW = "NEEDS_MANUAL_REVIEW"
@@ -180,6 +186,42 @@ class CandidateRefreshEvaluation:
             "source_network_product_id": self.source_network_product_id or "",
             "source_merchant_product_id": self.source_merchant_product_id or "",
             "action": self.action,
+        }
+
+
+@dataclass(frozen=True)
+class ReviewedCandidateOfferPlan:
+    candidate_id: int
+    candidate_brand: str | None
+    candidate_name: str
+    candidate_status: str
+    proposed_perfume_id: str | None
+    network_product_id: str | None
+    merchant_product_id: str | None
+    affiliate_url: str | None
+    price: Decimal | None
+    currency: str | None
+    existing_offer_id: int | None
+    offer_action: str
+    skip_reason: str | None
+    item: LoadedNormalizedItem | None = None
+    match_result: MatchResult | None = None
+
+    def as_csv_row(self) -> dict[str, object]:
+        return {
+            "candidate_id": self.candidate_id,
+            "candidate_brand": self.candidate_brand or "",
+            "candidate_name": self.candidate_name,
+            "candidate_status": self.candidate_status,
+            "proposed_perfume_id": self.proposed_perfume_id or "",
+            "network_product_id": self.network_product_id or "",
+            "merchant_product_id": self.merchant_product_id or "",
+            "affiliate_url": self.affiliate_url or "",
+            "price": _decimal_to_string(self.price) or "",
+            "currency": self.currency or "",
+            "existing_offer_id": self.existing_offer_id or "",
+            "offer_action": self.offer_action,
+            "skip_reason": self.skip_reason or "",
         }
 
 
@@ -795,6 +837,198 @@ class CandidateService:
                 pass
             raise CandidateError(message) from exc
 
+    def apply_reviewed_product_match_candidates(
+        self,
+        *,
+        advertiser_id: str,
+        feed_id: str,
+        dry_run: bool,
+        limit: int | None = None,
+        report_dir: Path | None = None,
+        statuses: list[str] | None = None,
+        brand: str | None = None,
+        min_score: int | None = None,
+        allow_needs_review: bool = False,
+    ) -> tuple[dict[str, object], Path]:
+        self.db_service.require_database_url()
+
+        selected_statuses = statuses or ["accepted_existing_perfume"]
+        self._validate_apply_reviewed_statuses(
+            statuses=selected_statuses,
+            allow_needs_review=allow_needs_review,
+        )
+
+        report_root = report_dir or self.settings.reports_dir
+        report_root.mkdir(parents=True, exist_ok=True)
+        report_stamp = _report_timestamp()
+        markdown_path = (
+            report_root / f"apply_reviewed_product_match_candidates_{report_stamp}.md"
+        )
+        csv_path = (
+            report_root
+            / f"apply_reviewed_product_match_candidates_offers_{report_stamp}.csv"
+        )
+        json_path = (
+            report_root / f"apply_reviewed_product_match_candidates_{report_stamp}.json"
+        )
+        report: dict[str, object] = {
+            "checked_at": _utc_now(),
+            "status": "error",
+            "command": "apply-reviewed-product-match-candidates",
+            "network": "awin",
+            "advertiser_id": advertiser_id,
+            "feed_id": feed_id,
+            "dry_run": dry_run,
+            "database_url_redacted": True,
+            "selection_limit": limit,
+            "brand": brand,
+            "min_score": min_score,
+            "statuses": selected_statuses,
+            "allow_needs_review": allow_needs_review,
+            "candidates_loaded": 0,
+            "candidates_applied": 0,
+            "offers_inserted": 0,
+            "offers_updated": 0,
+            "offers_unchanged": 0,
+            "candidates_skipped": 0,
+            "skipped_missing_payload": 0,
+            "skipped_missing_external_id": 0,
+            "skipped_missing_perfume": 0,
+            "skipped_status_not_allowed": 0,
+            "skipped_ambiguous": 0,
+            "skipped_below_min_score": 0,
+            "top_brands": [],
+            "sample_applied": [],
+            "markdown_report_path": str(markdown_path),
+            "csv_report_path": str(csv_path),
+        }
+
+        try:
+            with self.db_service.connect() as conn:
+                advertiser_row, affiliate_feed_row = self.matching_service._resolve_feed_context(  # noqa: SLF001
+                    conn,
+                    advertiser_id=advertiser_id,
+                    feed_id=feed_id,
+                )
+                source_candidates = self._load_apply_reviewed_candidates(
+                    conn,
+                    advertiser_db_id=int(advertiser_row["id"]),
+                    network_feed_id=str(affiliate_feed_row["network_feed_id"]),
+                    statuses=selected_statuses,
+                    brand=brand,
+                    limit=limit,
+                )
+                catalog_rows, _ = self.matching_service._load_catalog_perfumes(conn)  # noqa: SLF001
+                perfume_ids = {perfume.id for perfume in catalog_rows}
+                plans = [
+                    self._evaluate_reviewed_candidate_offer_plan(
+                        conn,
+                        source,
+                        advertiser_db_id=int(advertiser_row["id"]),
+                        affiliate_feed_db_id=int(affiliate_feed_row["id"]),
+                        network_feed_id=str(affiliate_feed_row["network_feed_id"]),
+                        known_perfume_ids=perfume_ids,
+                        min_score=min_score,
+                        allow_needs_review=allow_needs_review,
+                    )
+                    for source in source_candidates
+                ]
+
+                brand_counts = Counter(
+                    (plan.candidate_brand or "<missing>") for plan in plans
+                )
+                applied_actions = {"inserted", "updated", "unchanged"}
+                applied = [
+                    plan for plan in plans if plan.offer_action in applied_actions
+                ]
+                report.update(
+                    {
+                        "status": "success",
+                        "candidates_loaded": len(source_candidates),
+                        "candidates_applied": len(applied),
+                        "offers_inserted": sum(
+                            1 for plan in plans if plan.offer_action == "inserted"
+                        ),
+                        "offers_updated": sum(
+                            1 for plan in plans if plan.offer_action == "updated"
+                        ),
+                        "offers_unchanged": sum(
+                            1 for plan in plans if plan.offer_action == "unchanged"
+                        ),
+                        "candidates_skipped": sum(
+                            1
+                            for plan in plans
+                            if plan.offer_action.startswith("skipped_")
+                        ),
+                        "skipped_missing_payload": sum(
+                            1
+                            for plan in plans
+                            if plan.offer_action == "skipped_missing_payload"
+                        ),
+                        "skipped_missing_external_id": sum(
+                            1
+                            for plan in plans
+                            if plan.offer_action == "skipped_missing_external_id"
+                        ),
+                        "skipped_missing_perfume": sum(
+                            1
+                            for plan in plans
+                            if plan.offer_action == "skipped_missing_perfume"
+                        ),
+                        "skipped_status_not_allowed": sum(
+                            1
+                            for plan in plans
+                            if plan.offer_action == "skipped_status_not_allowed"
+                        ),
+                        "skipped_ambiguous": sum(
+                            1
+                            for plan in plans
+                            if plan.offer_action == "skipped_ambiguous"
+                        ),
+                        "skipped_below_min_score": sum(
+                            1
+                            for plan in plans
+                            if plan.offer_action == "skipped_below_min_score"
+                        ),
+                        "top_brands": [
+                            {"candidate_brand": brand_name, "count": count}
+                            for brand_name, count in brand_counts.most_common(10)
+                        ],
+                        "sample_applied": [
+                            plan.as_csv_row()
+                            for plan in applied[:10]
+                        ],
+                    }
+                )
+
+                if not dry_run:
+                    self._persist_reviewed_candidate_offer_plans(
+                        conn,
+                        advertiser_db_id=int(advertiser_row["id"]),
+                        network_feed_id=str(affiliate_feed_row["network_feed_id"]),
+                        plans=plans,
+                    )
+
+                self._write_apply_reviewed_candidates_markdown(markdown_path, report)
+                self._write_apply_reviewed_candidates_csv(csv_path, plans)
+
+            json_path.write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return report, json_path
+        except Exception as exc:
+            message = str(exc)
+            report["error"] = message
+            try:
+                json_path.write_text(
+                    json.dumps(report, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+            raise CandidateError(message) from exc
+
     def _ensure_candidate_dedupe_column(self, conn: Any) -> None:
         row = conn.execute(
             """
@@ -893,6 +1127,57 @@ class CandidateService:
             params.append(limit)
         rows = conn.execute(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
+
+    def _load_apply_reviewed_candidates(
+        self,
+        conn: Any,
+        *,
+        advertiser_db_id: int,
+        network_feed_id: str,
+        statuses: list[str],
+        brand: str | None,
+        limit: int | None,
+    ) -> list[dict[str, object]]:
+        sql = """
+            select *
+            from product_match_candidates
+            where advertiser_id = %s
+              and status = any(%s)
+              and proposed_perfume_id is not null
+              and coalesce(enrichment_payload ->> 'network_feed_id', '') = %s
+        """
+        params: list[object] = [advertiser_db_id, statuses, network_feed_id]
+        if brand:
+            sql += " and lower(coalesce(candidate_brand, '')) = lower(%s)"
+            params.append(brand)
+        sql += " order by id"
+        if limit is not None:
+            sql += " limit %s"
+            params.append(limit)
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def _validate_apply_reviewed_statuses(
+        self,
+        *,
+        statuses: list[str],
+        allow_needs_review: bool,
+    ) -> None:
+        allowed_statuses = (
+            APPLY_REVIEWED_ALLOW_NEEDS_REVIEW_STATUSES
+            if allow_needs_review
+            else APPLY_REVIEWED_DEFAULT_STATUSES
+        )
+        invalid = sorted(set(statuses) - allowed_statuses)
+        if invalid:
+            if not allow_needs_review and "needs_review" in invalid:
+                raise CandidateError(
+                    "--allow-needs-review is required to process needs_review candidates"
+                )
+            raise CandidateError(
+                "Unsupported --status values for apply-reviewed-product-match-candidates: "
+                + ", ".join(invalid)
+            )
 
     def _classify_insert_candidates(
         self,
@@ -1286,6 +1571,167 @@ class CandidateService:
             ),
         )
 
+    def _build_reviewed_candidate_match_result(
+        self,
+        source: dict[str, object],
+    ) -> MatchResult:
+        enrichment = dict(source.get("enrichment_payload") or {})
+        score = float(source.get("match_score") or 0)
+        if score <= 0:
+            score = 100.0
+        match_components = dict(enrichment.get("match_components") or {})
+        match_components["source_candidate_id"] = int(source["id"])
+        match_components["reviewed_candidate_status"] = str(source["status"])
+        match_components["original_match_method"] = _identifier_value(
+            enrichment.get("match_method")
+        )
+        return MatchResult(
+            status="matched_reviewed_candidate",
+            score=score,
+            method="reviewed_candidate",
+            perfume_id=str(source["proposed_perfume_id"]),
+            perfume_name=None,
+            match_reason=(
+                str(source["match_reason"])
+                if source.get("match_reason") is not None
+                else "Applied from reviewed product_match_candidates."
+            ),
+            match_components=match_components,
+        )
+
+    def _evaluate_reviewed_candidate_offer_plan(
+        self,
+        conn: Any,
+        source: dict[str, object],
+        *,
+        advertiser_db_id: int,
+        affiliate_feed_db_id: int,
+        network_feed_id: str,
+        known_perfume_ids: set[str],
+        min_score: int | None,
+        allow_needs_review: bool,
+    ) -> ReviewedCandidateOfferPlan:
+        candidate_status = str(source["status"])
+        proposed_perfume_id = (
+            str(source["proposed_perfume_id"])
+            if source.get("proposed_perfume_id") is not None
+            else None
+        )
+        score = _decimal_from_value(source.get("match_score"))
+        if candidate_status not in APPLY_REVIEWED_DEFAULT_STATUSES:
+            if not (allow_needs_review and candidate_status == "needs_review"):
+                return self._build_reviewed_candidate_offer_plan(
+                    source,
+                    offer_action="skipped_status_not_allowed",
+                    skip_reason="Candidate status is not allowed for this command.",
+                )
+
+        if proposed_perfume_id is None or proposed_perfume_id not in known_perfume_ids:
+            return self._build_reviewed_candidate_offer_plan(
+                source,
+                offer_action="skipped_missing_perfume",
+                skip_reason="Candidate has no valid proposed_perfume_id in public.perfumes.",
+            )
+
+        if min_score is not None and float(score or Decimal("0")) < float(min_score):
+            return self._build_reviewed_candidate_offer_plan(
+                source,
+                offer_action="skipped_below_min_score",
+                skip_reason="Candidate match_score is below --min-score.",
+            )
+
+        item = self._rebuild_refresh_item(
+            source,
+            affiliate_feed_db_id=affiliate_feed_db_id,
+        )
+        missing_payload = []
+        if not item.affiliate_url:
+            missing_payload.append("affiliate_url")
+        if item.price is None:
+            missing_payload.append("price")
+        if missing_payload:
+            return self._build_reviewed_candidate_offer_plan(
+                source,
+                offer_action="skipped_missing_payload",
+                skip_reason="Missing required offer payload: " + ", ".join(missing_payload),
+            )
+        if not item.network_product_id and not item.merchant_product_id:
+            return self._build_reviewed_candidate_offer_plan(
+                source,
+                offer_action="skipped_missing_external_id",
+                skip_reason="Missing network_product_id and merchant_product_id.",
+            )
+
+        match_result = self._build_reviewed_candidate_match_result(source)
+        try:
+            existing_offer = self.matching_service._find_existing_offer(  # noqa: SLF001
+                conn,
+                advertiser_db_id=advertiser_db_id,
+                network_product_id=item.network_product_id,
+                merchant_product_id=item.merchant_product_id,
+            )
+            plan = self.matching_service._plan_offer_upsert(  # noqa: SLF001
+                existing_offer=existing_offer,
+                item=item,
+                network_feed_id=network_feed_id,
+                match_result=match_result,
+            )
+        except MatchingError as exc:
+            return self._build_reviewed_candidate_offer_plan(
+                source,
+                offer_action="skipped_ambiguous",
+                skip_reason=str(exc),
+            )
+
+        return self._build_reviewed_candidate_offer_plan(
+            source,
+            offer_action=plan.action,
+            skip_reason=None,
+            existing_offer_id=(
+                int(existing_offer["id"]) if existing_offer is not None else None
+            ),
+            item=item,
+            match_result=match_result,
+        )
+
+    def _build_reviewed_candidate_offer_plan(
+        self,
+        source: dict[str, object],
+        *,
+        offer_action: str,
+        skip_reason: str | None,
+        existing_offer_id: int | None = None,
+        item: LoadedNormalizedItem | None = None,
+        match_result: MatchResult | None = None,
+    ) -> ReviewedCandidateOfferPlan:
+        enrichment = dict(source.get("enrichment_payload") or {})
+        affiliate_url = _identifier_value(enrichment.get("affiliate_url")) or _identifier_value(
+            source.get("candidate_url")
+        )
+        return ReviewedCandidateOfferPlan(
+            candidate_id=int(source["id"]),
+            candidate_brand=(
+                str(source["candidate_brand"]) if source.get("candidate_brand") else None
+            ),
+            candidate_name=str(source["candidate_name"]),
+            candidate_status=str(source["status"]),
+            proposed_perfume_id=(
+                str(source["proposed_perfume_id"])
+                if source.get("proposed_perfume_id") is not None
+                else None
+            ),
+            network_product_id=_identifier_value(enrichment.get("network_product_id")),
+            merchant_product_id=_identifier_value(enrichment.get("merchant_product_id")),
+            affiliate_url=affiliate_url,
+            price=_decimal_from_value(enrichment.get("price")),
+            currency=_identifier_value(enrichment.get("currency")),
+            existing_offer_id=existing_offer_id,
+            offer_action=offer_action,
+            skip_reason=skip_reason,
+            item=item,
+            match_result=match_result,
+        )
+
     def _decide_candidate_refresh_action(
         self,
         *,
@@ -1361,6 +1807,109 @@ class CandidateService:
                         evaluation.candidate_id,
                     ),
                 )
+
+    def _persist_reviewed_candidate_offer_plans(
+        self,
+        conn: Any,
+        *,
+        advertiser_db_id: int,
+        network_feed_id: str,
+        plans: list[ReviewedCandidateOfferPlan],
+    ) -> None:
+        with conn.transaction():
+            for plan in plans:
+                if plan.offer_action not in {"inserted", "updated", "unchanged"}:
+                    continue
+                if plan.item is None or plan.match_result is None:
+                    raise CandidateError(
+                        "Internal error: reviewed candidate offer plan is missing offer payload."
+                    )
+                self.matching_service._upsert_offer(  # noqa: SLF001
+                    conn,
+                    item=plan.item,
+                    advertiser_db_id=advertiser_db_id,
+                    network_feed_id=network_feed_id,
+                    match_result=plan.match_result,
+                )
+
+    def _write_apply_reviewed_candidates_markdown(
+        self,
+        markdown_path: Path,
+        report: Mapping[str, object],
+    ) -> None:
+        lines = [
+            "# apply-reviewed-product-match-candidates",
+            "",
+            f"- status: `{report.get('status')}`",
+            f"- dry_run: `{report.get('dry_run')}`",
+            f"- advertiser_id: `{report.get('advertiser_id')}`",
+            f"- feed_id: `{report.get('feed_id')}`",
+            f"- statuses: `{','.join(report.get('statuses') or [])}`",
+            f"- allow_needs_review: `{report.get('allow_needs_review')}`",
+            f"- candidates_loaded: `{report.get('candidates_loaded')}`",
+            f"- candidates_applied: `{report.get('candidates_applied')}`",
+            f"- offers_inserted: `{report.get('offers_inserted')}`",
+            f"- offers_updated: `{report.get('offers_updated')}`",
+            f"- offers_unchanged: `{report.get('offers_unchanged')}`",
+            f"- candidates_skipped: `{report.get('candidates_skipped')}`",
+            "",
+            "## Skip counts",
+            "",
+            f"- skipped_missing_payload: `{report.get('skipped_missing_payload')}`",
+            f"- skipped_missing_external_id: `{report.get('skipped_missing_external_id')}`",
+            f"- skipped_missing_perfume: `{report.get('skipped_missing_perfume')}`",
+            f"- skipped_status_not_allowed: `{report.get('skipped_status_not_allowed')}`",
+            f"- skipped_ambiguous: `{report.get('skipped_ambiguous')}`",
+            f"- skipped_below_min_score: `{report.get('skipped_below_min_score')}`",
+            "",
+            "## Top brands",
+            "",
+        ]
+        top_brands = report.get("top_brands") or []
+        if top_brands:
+            for row in top_brands:
+                lines.append(f"- `{row.get('candidate_brand')}`: `{row.get('count')}`")
+        else:
+            lines.append("- none")
+        lines.extend(
+            [
+                "",
+                "## Safety",
+                "",
+                "- This command writes only `public.offers` unless `--dry-run` is used.",
+                "- It never mutates `public.perfumes`.",
+                "- It does not approve or promote candidates by itself.",
+                "- `needs_review` rows are blocked unless `--allow-needs-review` is passed.",
+                "",
+            ]
+        )
+        markdown_path.write_text("\n".join(lines), encoding="utf-8")
+
+    def _write_apply_reviewed_candidates_csv(
+        self,
+        csv_path: Path,
+        plans: list[ReviewedCandidateOfferPlan],
+    ) -> None:
+        fieldnames = [
+            "candidate_id",
+            "candidate_brand",
+            "candidate_name",
+            "candidate_status",
+            "proposed_perfume_id",
+            "network_product_id",
+            "merchant_product_id",
+            "affiliate_url",
+            "price",
+            "currency",
+            "existing_offer_id",
+            "offer_action",
+            "skip_reason",
+        ]
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for plan in plans:
+                writer.writerow(plan.as_csv_row())
 
     def _write_refresh_markdown(
         self,
@@ -2296,6 +2845,26 @@ def format_refresh_candidate_summary(
         f"candidates_without_match={report.get('candidates_without_match')}",
         f"candidates_unchanged={report.get('candidates_unchanged')}",
         f"candidates_ignored_closed_status={report.get('candidates_ignored_closed_status')}",
+        f"markdown_report_path={report.get('markdown_report_path')}",
+        f"csv_report_path={report.get('csv_report_path')}",
+        f"report_path={report_path}",
+    ]
+    return "\n".join(lines)
+
+
+def format_apply_reviewed_candidate_summary(
+    report: Mapping[str, object],
+    report_path: Path,
+) -> str:
+    lines = [
+        f"status={report.get('status')}",
+        f"dry_run={report.get('dry_run')}",
+        f"candidates_loaded={report.get('candidates_loaded')}",
+        f"candidates_applied={report.get('candidates_applied')}",
+        f"offers_inserted={report.get('offers_inserted')}",
+        f"offers_updated={report.get('offers_updated')}",
+        f"offers_unchanged={report.get('offers_unchanged')}",
+        f"candidates_skipped={report.get('candidates_skipped')}",
         f"markdown_report_path={report.get('markdown_report_path')}",
         f"csv_report_path={report.get('csv_report_path')}",
         f"report_path={report_path}",
