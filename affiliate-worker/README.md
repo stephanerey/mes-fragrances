@@ -458,6 +458,8 @@ The repo now also ships a separate host wrapper:
 
 Supported host environment variables:
 
+- `AFFILIATE_DIGEST_DRY_RUN`
+- `AFFILIATE_DIGEST_SEND_EMAIL`
 - `AFFILIATE_HOST_DIGEST_EMAIL_ENABLED`
 - `AFFILIATE_HOST_DIGEST_EMAIL_TO`
 - `AFFILIATE_HOST_DIGEST_EMAIL_FROM`
@@ -475,7 +477,14 @@ The weekly wrapper:
 - generates a digest from the last `N` days using `/data/reports` as the report
   root;
 - writes Markdown + JSON files under `/data/reports/affiliate_digest_weekly_<run_ts>`;
-- defaults to `--dry-run`, which never sends host email;
+- defaults to `AFFILIATE_DIGEST_DRY_RUN=true` and
+  `AFFILIATE_DIGEST_SEND_EMAIL=false`;
+- treats explicit CLI flags `--dry-run`, `--no-dry-run`, and `--send-email` as
+  overrides over those environment defaults;
+- `AFFILIATE_DIGEST_DRY_RUN=true` maps to the wrapper's dry-run mode, while
+  `AFFILIATE_DIGEST_DRY_RUN=false` enables a non-dry-run digest execution;
+- `AFFILIATE_DIGEST_SEND_EMAIL=true` maps to the wrapper's `--send-email`
+  behavior, while `false` keeps host-side delivery disabled;
 - sends the digest through the host MTA only when explicitly enabled and the
   wrapper is called with `--no-dry-run --send-email`;
 - does not modify systemd on its own.

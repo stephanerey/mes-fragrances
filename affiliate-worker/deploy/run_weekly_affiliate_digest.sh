@@ -15,6 +15,8 @@ DIGEST_EMAIL_SUBJECT_PREFIX="${AFFILIATE_HOST_DIGEST_EMAIL_SUBJECT_PREFIX:-[Awin
 DIGEST_EMAIL_COMMAND="${AFFILIATE_HOST_DIGEST_EMAIL_COMMAND:-sendmail}"
 DIGEST_SINCE_DAYS="${AFFILIATE_DIGEST_SINCE_DAYS:-${AFFILIATE_HOST_DIGEST_SINCE_DAYS:-7}}"
 DIGEST_LOCALE="${AFFILIATE_DIGEST_LOCALE:-${AFFILIATE_HOST_DIGEST_LOCALE:-fr}}"
+DIGEST_DRY_RUN_DEFAULT="${AFFILIATE_DIGEST_DRY_RUN:-true}"
+DIGEST_SEND_EMAIL_DEFAULT="${AFFILIATE_DIGEST_SEND_EMAIL:-false}"
 SEND_EMAIL=false
 DRY_RUN=true
 
@@ -23,9 +25,15 @@ usage() {
 Usage: run_weekly_affiliate_digest.sh [--dry-run] [--no-dry-run] [--send-email]
 
 Defaults:
+  AFFILIATE_DIGEST_DRY_RUN=true
+  AFFILIATE_DIGEST_SEND_EMAIL=false
+
+Flags:
   --dry-run       Generate the digest inside Docker without sending host email.
   --no-dry-run    Generate the digest without the dry-run flag.
   --send-email    Allow host-side delivery, but only when --no-dry-run is also set.
+
+Explicit CLI flags override the corresponding environment defaults.
 EOF
 }
 
@@ -42,6 +50,20 @@ is_true() {
     1|true|yes|y|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+apply_env_defaults() {
+  if is_true "$DIGEST_DRY_RUN_DEFAULT"; then
+    DRY_RUN=true
+  else
+    DRY_RUN=false
+  fi
+
+  if is_true "$DIGEST_SEND_EMAIL_DEFAULT"; then
+    SEND_EMAIL=true
+  else
+    SEND_EMAIL=false
+  fi
 }
 
 parse_args() {
@@ -139,6 +161,7 @@ send_digest_email_if_configured() {
 }
 
 main() {
+  apply_env_defaults
   parse_args "$@"
 
   local run_ts digest_dir_container digest_subject digest_output
@@ -147,6 +170,8 @@ main() {
   run_ts="$(date +%Y%m%d_%H%M%S)"
   digest_dir_container="/data/reports/affiliate_digest_weekly_${run_ts}"
   digest_subject="${DIGEST_EMAIL_SUBJECT_PREFIX} Digest hebdomadaire"
+
+  log "Weekly digest config: dry_run=$DRY_RUN send_email=$SEND_EMAIL since_days=$DIGEST_SINCE_DAYS locale=$DIGEST_LOCALE image=$WORKER_IMAGE network=$DOCKER_NETWORK"
 
   digest_cmd=(
     "$DOCKER_BIN" run --rm
