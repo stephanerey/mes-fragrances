@@ -21,6 +21,11 @@ from app.db import (
     format_inspect_db_summary,
     format_migrate_db_summary,
 )
+from app.digest import (
+    AffiliateDigestService,
+    DigestError,
+    format_digest_report_summary,
+)
 from app.logging_config import configure_logging
 from app.matching import (
     MatchingError,
@@ -174,6 +179,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_pipeline.add_argument("--email-report", action="store_true")
     run_pipeline.add_argument("--no-email-report", action="store_true")
 
+    digest_reports = subparsers.add_parser(
+        "digest-reports",
+        help="Aggregate recent pipeline reports into a French weekly digest.",
+    )
+    digest_reports.add_argument("--reports-root", type=Path)
+    digest_reports.add_argument("--since-days", type=int, default=7)
+    digest_reports.add_argument("--locale", default="fr")
+    digest_reports.add_argument("--output-dir", type=Path)
+    digest_reports.add_argument("--email-subject")
+    digest_reports.add_argument("--dry-run", action="store_true")
+    digest_reports.add_argument("--send-email", action="store_true")
+
     subparsers.add_parser(
         "inspect-db",
         help="Inspect the connected database schema and existing catalog tables.",
@@ -230,9 +247,7 @@ def run_import_local_csv(args: argparse.Namespace) -> int:
 def run_import_feeds(args: argparse.Namespace) -> int:
     if args.raw_stage_only:
         if not args.advertiser or not args.feed_id:
-            raise RawStagingError(
-                "--advertiser and --feed-id are required with --raw-stage-only"
-            )
+            raise RawStagingError("--advertiser and --feed-id are required with --raw-stage-only")
         settings = get_settings()
         report, report_path = RawStagingService(settings).import_remote_feed(
             network=args.network,
@@ -418,6 +433,21 @@ def run_affiliate_pipeline(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+def run_digest_reports(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = AffiliateDigestService(settings).generate_digest(
+        reports_root=args.reports_root or settings.reports_dir,
+        since_days=args.since_days,
+        locale=str(args.locale),
+        output_dir=args.output_dir,
+        email_subject=str(args.email_subject) if args.email_subject is not None else None,
+        dry_run=args.dry_run,
+        send_email=args.send_email,
+    )
+    print(format_digest_report_summary(report, report_path))
+    return 0
+
+
 def run_inspect_db() -> int:
     settings = get_settings()
     report, report_path = DatabaseService(settings).inspect_db()
@@ -465,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_apply_reviewed_product_match_candidates(args)
         if args.command == "run-affiliate-pipeline":
             return run_affiliate_pipeline(args)
+        if args.command == "digest-reports":
+            return run_digest_reports(args)
         if args.command == "inspect-db":
             return run_inspect_db()
         if args.command == "migrate-db":
@@ -480,6 +512,7 @@ def main(argv: list[str] | None = None) -> int:
         NormalizationError,
         MatchingError,
         CandidateError,
+        DigestError,
     ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

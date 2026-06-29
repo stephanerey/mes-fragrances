@@ -147,6 +147,8 @@ python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --f
 python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --skip-refresh-dry-run
 python -m app.main run-affiliate-pipeline --network awin --advertiser 105475 --feed-id 97867 --email-report
 python -m app.main run-affiliate-pipeline --network awin --random-delay-max-seconds 300
+python -m app.main digest-reports --reports-root /data/reports --since-days 7 --locale fr --output-dir /data/reports/affiliate_digest_weekly
+python -m app.main digest-reports --reports-root /data/reports --since-days 7 --locale fr --output-dir /data/reports/affiliate_digest_weekly --dry-run
 python -m app.main inspect-db
 python -m app.main migrate-db --plan
 python -m app.main migrate-db --dry-run
@@ -408,6 +410,8 @@ Default behavior:
 - the wrapper always runs the worker container with `--no-email-report`;
 - the wrapper returns the original pipeline exit code even if email delivery
   fails.
+- recommended production policy is now `success=false` and `failure=true`, so
+  the daily wrapper only sends immediate alerts on critical failures.
 
 Example host env file:
 
@@ -416,10 +420,58 @@ AFFILIATE_HOST_EMAIL_REPORT_ENABLED=true
 AFFILIATE_HOST_EMAIL_REPORT_TO=ops@example.net
 AFFILIATE_HOST_EMAIL_REPORT_FROM=awin-worker@example.net
 AFFILIATE_HOST_EMAIL_REPORT_SUBJECT_PREFIX=[Awin]
-AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_SUCCESS=true
+AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_SUCCESS=false
 AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_FAILURE=true
 AFFILIATE_HOST_EMAIL_REPORT_COMMAND=sendmail
 ```
+
+### Weekly digest command
+
+`digest-reports` aggregates recent `affiliate_pipeline_*.json` files into a
+French Markdown digest plus a machine-readable JSON summary. It is designed to
+keep the pipeline daily, keep daily JSON/Markdown/CSV files, remove noisy daily
+success emails, and prepare multi-feed reporting before enabling a second
+advertiser such as Flaconi FR.
+
+Supported arguments:
+
+- `--reports-root`
+- `--since-days`
+- `--locale` (currently `fr`)
+- `--output-dir`
+- `--email-subject`
+- `--dry-run`
+- `--send-email`
+
+Current behavior:
+
+- digest generation reads existing report files only;
+- backlog snapshot is included when `DATABASE_URL` is configured;
+- the digest is grouped by `(network, advertiser_id, feed_id)`;
+- `--send-email` uses the container-level `AFFILIATE_EMAIL_REPORT_*` settings;
+- `--dry-run` keeps generation active and suppresses digest email delivery.
+
+### Weekly host digest wrapper
+
+The repo now also ships a separate host wrapper:
+[run_weekly_affiliate_digest.sh](/home/eva/mes-fragrances/affiliate-worker/deploy/run_weekly_affiliate_digest.sh)
+
+Supported host environment variables:
+
+- `AFFILIATE_HOST_DIGEST_EMAIL_ENABLED`
+- `AFFILIATE_HOST_DIGEST_EMAIL_TO`
+- `AFFILIATE_HOST_DIGEST_EMAIL_FROM`
+- `AFFILIATE_HOST_DIGEST_EMAIL_SUBJECT_PREFIX`
+- `AFFILIATE_HOST_DIGEST_EMAIL_COMMAND`
+- `AFFILIATE_HOST_DIGEST_SINCE_DAYS`
+- `AFFILIATE_HOST_DIGEST_LOCALE`
+
+The weekly wrapper:
+
+- generates a digest from the last `N` days using `digest-reports`;
+- writes Markdown + JSON files under `/data/reports/affiliate_digest_weekly_*`;
+- sends the digest through the host MTA when explicitly enabled;
+- does not modify systemd on its own.
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
 
@@ -505,18 +557,28 @@ Recommended deployment procedure for the host wrapper:
 2. Create or update a host env file such as
    `/home/eva/mes-fragrances/affiliate-worker/.host-email-report.env` with the
    `AFFILIATE_HOST_EMAIL_REPORT_*` variables.
-3. Copy the updated service template from the repo to `/etc/systemd/system/`.
-4. Run `systemctl daemon-reload`.
-5. Restart the service or timer if required by your change window.
-6. Test the wrapper manually:
+3. For the daily wrapper, set
+   `AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_SUCCESS=false` and
+   `AFFILIATE_HOST_EMAIL_REPORT_SEND_ON_FAILURE=true`.
+4. Create a separate weekly digest env file with the
+   `AFFILIATE_HOST_DIGEST_EMAIL_*` variables if you want host-side digest
+   delivery.
+5. Copy wrapper and unit files only when your change window explicitly allows
+   it.
+6. Run `systemctl daemon-reload` only when you actually deploy new unit files.
+7. Restart the service or timer only inside the deployment window.
+8. Test the wrappers manually:
 
 ```bash
 /home/eva/mes-fragrances/affiliate-worker/deploy/run_daily_affiliate_pipeline.sh
+/home/eva/mes-fragrances/affiliate-worker/deploy/run_weekly_affiliate_digest.sh
 ```
 
-The wrapper reads `latest_affiliate_pipeline_report.json`, sends a plain-text
-summary through host `sendmail`, and never calls
-`apply-reviewed-product-match-candidates`.
+The daily wrapper reads `latest_affiliate_pipeline_report.json`, sends an
+immediate host alert only when the host policy allows it, and never calls
+`apply-reviewed-product-match-candidates`. The weekly wrapper generates the
+digest from daily report files and can send it through the host MTA without
+changing the pipeline cadence.
 
 Before the first non-dry-run `migrate-db` on the VPS, take a backup:
 

@@ -219,14 +219,8 @@ class AffiliateEmailReportService:
             "",
             "Refresh dry-run:",
             f"  candidates_loaded: {_as_int(totals, 'refresh_candidates_loaded')}",
-            (
-                "  candidates_would_update: "
-                f"{_as_int(totals, 'refresh_candidates_would_update')}"
-            ),
-            (
-                "  candidates_without_match: "
-                f"{_as_int(totals, 'refresh_candidates_without_match')}"
-            ),
+            (f"  candidates_would_update: {_as_int(totals, 'refresh_candidates_would_update')}"),
+            (f"  candidates_without_match: {_as_int(totals, 'refresh_candidates_without_match')}"),
             f"  candidates_unchanged: {_as_int(totals, 'refresh_candidates_unchanged')}",
             "",
             "Staging counts:",
@@ -237,9 +231,7 @@ class AffiliateEmailReportService:
         if safe_top_brands:
             lines.extend(["", "Top SAFE brands:"])
             for row in safe_top_brands[:10]:
-                lines.append(
-                    f"  {row.get('candidate_brand', '<missing>')}: {row.get('count', 0)}"
-                )
+                lines.append(f"  {row.get('candidate_brand', '<missing>')}: {row.get('count', 0)}")
 
         csv_paths: list[str] = []
         for feed in report.get("feeds", []):
@@ -266,6 +258,86 @@ class AffiliateEmailReportService:
                 lines.append(f"  - {warning}")
 
         return _sanitize_body("\n".join(lines))
+
+    def send_text_email(
+        self,
+        *,
+        subject: str,
+        body: str,
+        force_enabled: bool | None = None,
+    ) -> dict[str, object]:
+        config = self._load_config()
+        enabled = config.enabled if force_enabled is None else force_enabled
+        config = AffiliateEmailConfig(
+            enabled=enabled,
+            to=config.to,
+            from_addr=config.from_addr,
+            subject_prefix=config.subject_prefix,
+            send_on_success=config.send_on_success,
+            send_on_failure=config.send_on_failure,
+            command=config.command,
+        )
+        result: dict[str, object] = {
+            "attempted": False,
+            "success": False,
+            "skipped": True,
+            "command": config.command,
+            "enabled": config.enabled,
+            "subject": _sanitize_subject(subject),
+            "recipient_configured": bool(config.to),
+            "sender_configured": bool(config.from_addr),
+            "error": "",
+        }
+        if not config.enabled:
+            result["skip_reason"] = "Email disabled by configuration."
+            return result
+
+        result["attempted"] = True
+        result["skipped"] = False
+        if not config.to:
+            result["error"] = "AFFILIATE_EMAIL_REPORT_TO is missing."
+            return result
+        if not config.from_addr:
+            result["error"] = "AFFILIATE_EMAIL_REPORT_FROM is missing."
+            return result
+        if config.command not in {"sendmail", "mail"}:
+            result["error"] = "AFFILIATE_EMAIL_REPORT_COMMAND must be 'sendmail' or 'mail'."
+            return result
+
+        try:
+            if config.command == "sendmail":
+                message = (
+                    f"To: {_sanitize_subject(config.to)}\n"
+                    f"From: {_sanitize_subject(config.from_addr)}\n"
+                    f"Subject: {result['subject']}\n"
+                    "MIME-Version: 1.0\n"
+                    "Content-Type: text/plain; charset=UTF-8\n"
+                    "\n"
+                    f"{_sanitize_body(body)}"
+                )
+                completed = _send_with_sendmail(message, config.from_addr)
+            else:
+                completed = _send_with_mail(
+                    config.to,
+                    config.from_addr,
+                    str(result["subject"]),
+                    body,
+                )
+        except Exception as exc:  # pragma: no cover - defensive path
+            result["error"] = str(exc)
+            return result
+
+        if completed.returncode != 0:
+            result["error"] = (
+                completed.stderr.strip()
+                or completed.stdout.strip()
+                or f"{config.command} exited with {completed.returncode}"
+            )
+            return result
+
+        result["success"] = True
+        result["hostname"] = socket.gethostname()
+        return result
 
     def send_pipeline_report(
         self,
@@ -312,46 +384,12 @@ class AffiliateEmailReportService:
             result["error"] = "AFFILIATE_EMAIL_REPORT_COMMAND must be 'sendmail' or 'mail'."
             return result
 
-        subject = _build_subject(
-            config.subject_prefix,
-            status=status,
-            finished_at=str(report.get("finished_at") or ""),
+        return self.send_text_email(
+            subject=_build_subject(
+                config.subject_prefix,
+                status=status,
+                finished_at=str(report.get("finished_at") or ""),
+            ),
+            body=self.build_pipeline_email_body(report, report_path),
+            force_enabled=config.enabled,
         )
-        result["subject"] = _sanitize_subject(subject)
-        body = self.build_pipeline_email_body(report, report_path)
-
-        try:
-            if config.command == "sendmail":
-                message = (
-                    f"To: {_sanitize_subject(config.to)}\n"
-                    f"From: {_sanitize_subject(config.from_addr)}\n"
-                    f"Subject: {result['subject']}\n"
-                    "MIME-Version: 1.0\n"
-                    "Content-Type: text/plain; charset=UTF-8\n"
-                    "\n"
-                    f"{body}"
-                )
-                completed = _send_with_sendmail(message, config.from_addr)
-            else:
-                completed = _send_with_mail(
-                    config.to,
-                    config.from_addr,
-                    str(result["subject"]),
-                    body,
-                )
-        except Exception as exc:  # pragma: no cover - defensive path
-            result["error"] = str(exc)
-            return result
-
-        if completed.returncode != 0:
-            result["error"] = (
-                completed.stderr.strip()
-                or completed.stdout.strip()
-                or f"{config.command} exited with {completed.returncode}"
-            )
-            return result
-
-        result["success"] = True
-        result["skipped"] = False
-        result["hostname"] = socket.gethostname()
-        return result
