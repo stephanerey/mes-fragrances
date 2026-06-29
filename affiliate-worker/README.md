@@ -463,14 +463,21 @@ Supported host environment variables:
 - `AFFILIATE_HOST_DIGEST_EMAIL_FROM`
 - `AFFILIATE_HOST_DIGEST_EMAIL_SUBJECT_PREFIX`
 - `AFFILIATE_HOST_DIGEST_EMAIL_COMMAND`
-- `AFFILIATE_HOST_DIGEST_SINCE_DAYS`
-- `AFFILIATE_HOST_DIGEST_LOCALE`
+- `AFFILIATE_DIGEST_SINCE_DAYS` (or legacy `AFFILIATE_HOST_DIGEST_SINCE_DAYS`)
+- `AFFILIATE_DIGEST_LOCALE` (or legacy `AFFILIATE_HOST_DIGEST_LOCALE`)
 
 The weekly wrapper:
 
-- generates a digest from the last `N` days using `digest-reports`;
-- writes Markdown + JSON files under `/data/reports/affiliate_digest_weekly_*`;
-- sends the digest through the host MTA when explicitly enabled;
+- runs `digest-reports` inside the worker container on
+  `mes-fragrances_cis_default`, so Docker-only hosts such as `db` resolve
+  correctly;
+- mounts the worker env file plus `/home/eva/mes-fragrances/affiliate-worker-data:/data`;
+- generates a digest from the last `N` days using `/data/reports` as the report
+  root;
+- writes Markdown + JSON files under `/data/reports/affiliate_digest_weekly_<run_ts>`;
+- defaults to `--dry-run`, which never sends host email;
+- sends the digest through the host MTA only when explicitly enabled and the
+  wrapper is called with `--no-dry-run --send-email`;
 - does not modify systemd on its own.
 
 For scalable production setup, store each Create-a-Feed download URL in a dedicated environment variable:
@@ -572,6 +579,7 @@ Recommended deployment procedure for the host wrapper:
 ```bash
 /home/eva/mes-fragrances/affiliate-worker/deploy/run_daily_affiliate_pipeline.sh
 /home/eva/mes-fragrances/affiliate-worker/deploy/run_weekly_affiliate_digest.sh
+/home/eva/mes-fragrances/affiliate-worker/deploy/run_weekly_affiliate_digest.sh --no-dry-run --send-email
 ```
 
 The daily wrapper reads `latest_affiliate_pipeline_report.json`, sends an

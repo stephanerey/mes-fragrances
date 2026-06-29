@@ -6,7 +6,6 @@ DOCKER_BIN="${DOCKER_BIN:-/usr/bin/docker}"
 WORKER_IMAGE="${WORKER_IMAGE:-mes-fragrances-affiliate-worker}"
 WORKER_ENV_FILE="${WORKER_ENV_FILE:-$ROOT_DIR/affiliate-worker/.env}"
 DATA_DIR="${DATA_DIR:-$ROOT_DIR/affiliate-worker-data}"
-REPORT_ROOT="${REPORT_ROOT:-$DATA_DIR/reports}"
 DOCKER_NETWORK="${AFFILIATE_DOCKER_NETWORK:-mes-fragrances_cis_default}"
 
 DIGEST_EMAIL_ENABLED="${AFFILIATE_HOST_DIGEST_EMAIL_ENABLED:-false}"
@@ -14,8 +13,21 @@ DIGEST_EMAIL_TO="${AFFILIATE_HOST_DIGEST_EMAIL_TO:-}"
 DIGEST_EMAIL_FROM="${AFFILIATE_HOST_DIGEST_EMAIL_FROM:-}"
 DIGEST_EMAIL_SUBJECT_PREFIX="${AFFILIATE_HOST_DIGEST_EMAIL_SUBJECT_PREFIX:-[Awin Digest]}"
 DIGEST_EMAIL_COMMAND="${AFFILIATE_HOST_DIGEST_EMAIL_COMMAND:-sendmail}"
-DIGEST_SINCE_DAYS="${AFFILIATE_HOST_DIGEST_SINCE_DAYS:-7}"
-DIGEST_LOCALE="${AFFILIATE_HOST_DIGEST_LOCALE:-fr}"
+DIGEST_SINCE_DAYS="${AFFILIATE_DIGEST_SINCE_DAYS:-${AFFILIATE_HOST_DIGEST_SINCE_DAYS:-7}}"
+DIGEST_LOCALE="${AFFILIATE_DIGEST_LOCALE:-${AFFILIATE_HOST_DIGEST_LOCALE:-fr}}"
+SEND_EMAIL=false
+DRY_RUN=true
+
+usage() {
+  cat <<'EOF'
+Usage: run_weekly_affiliate_digest.sh [--dry-run] [--no-dry-run] [--send-email]
+
+Defaults:
+  --dry-run       Generate the digest inside Docker without sending host email.
+  --no-dry-run    Generate the digest without the dry-run flag.
+  --send-email    Allow host-side delivery, but only when --no-dry-run is also set.
+EOF
+}
 
 log() {
   printf '%s\n' "$*"
@@ -30,6 +42,32 @@ is_true() {
     1|true|yes|y|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dry-run)
+        DRY_RUN=true
+        ;;
+      --no-dry-run)
+        DRY_RUN=false
+        ;;
+      --send-email)
+        SEND_EMAIL=true
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        warn "Unknown argument: $1"
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
 }
 
 send_digest_email_if_configured() {
@@ -101,30 +139,34 @@ send_digest_email_if_configured() {
 }
 
 main() {
-  local run_ts digest_dir_host digest_dir_container digest_subject digest_output digest_exit
+  parse_args "$@"
+
+  local run_ts digest_dir_container digest_subject digest_output
+  local digest_exit
+  local -a digest_cmd
   run_ts="$(date +%Y%m%d_%H%M%S)"
-  digest_dir_host="$REPORT_ROOT/affiliate_digest_weekly_${run_ts}"
   digest_dir_container="/data/reports/affiliate_digest_weekly_${run_ts}"
   digest_subject="${DIGEST_EMAIL_SUBJECT_PREFIX} Digest hebdomadaire"
-  mkdir -p "$digest_dir_host"
+
+  digest_cmd=(
+    "$DOCKER_BIN" run --rm
+    --network "$DOCKER_NETWORK"
+    --env-file "$WORKER_ENV_FILE"
+    -v "$DATA_DIR:/data"
+    "$WORKER_IMAGE"
+    digest-reports
+    --reports-root /data/reports
+    --since-days "$DIGEST_SINCE_DAYS"
+    --locale "$DIGEST_LOCALE"
+    --output-dir "$digest_dir_container"
+    --email-subject "$digest_subject"
+  )
+  if [ "$DRY_RUN" = true ]; then
+    digest_cmd+=(--dry-run)
+  fi
 
   set +e
-  digest_output="$(
-    "$DOCKER_BIN" run --rm \
-      --network "$DOCKER_NETWORK" \
-      --env-file "$WORKER_ENV_FILE" \
-      -v "$DATA_DIR:/data" \
-      "$WORKER_IMAGE" \
-      digest-reports \
-      --reports-root /data/reports \
-      --since-days "$DIGEST_SINCE_DAYS" \
-      --locale "$DIGEST_LOCALE" \
-      --output-dir "$digest_dir_container" \
-      --email-subject "$digest_subject" \
-      --dry-run \
-      "$@" \
-      2>&1
-  )"
+  digest_output="$("${digest_cmd[@]}" 2>&1)"
   digest_exit=$?
   set -e
 
@@ -144,6 +186,15 @@ main() {
     return 0
   fi
   markdown_path_host="$DATA_DIR${markdown_path_container#/data}"
+
+  if [ "$DRY_RUN" = true ]; then
+    log "Host digest email skipped because dry-run is enabled."
+    return 0
+  fi
+  if [ "$SEND_EMAIL" != true ]; then
+    log "Host digest email skipped. Re-run with --send-email to deliver via host MTA."
+    return 0
+  fi
 
   send_digest_email_if_configured "$digest_subject" "$markdown_path_host"
 }
