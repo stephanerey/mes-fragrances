@@ -188,7 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
     digest_reports.add_argument("--locale", default="fr")
     digest_reports.add_argument("--output-dir", type=Path)
     digest_reports.add_argument("--email-subject")
-    digest_reports.add_argument("--dry-run", action="store_true")
+    digest_reports.add_argument(
+        "--dry-run",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     digest_reports.add_argument("--send-email", action="store_true")
 
     subparsers.add_parser(

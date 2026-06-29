@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from app.config import get_settings
-from app.main import main
+from app.main import build_parser, main
 
 
 def clear_settings_cache() -> None:
@@ -386,3 +386,64 @@ def test_migrate_db_requires_database_url(monkeypatch, capsys, tmp_path: Path) -
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "DATABASE_URL" in captured.err
+
+
+def test_digest_reports_parser_supports_explicit_dry_run_overrides() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(["digest-reports", "--dry-run"])
+    assert args.dry_run is True
+
+    args = parser.parse_args(["digest-reports", "--no-dry-run"])
+    assert args.dry_run is False
+
+    args = parser.parse_args(["digest-reports", "--no-dry-run", "--dry-run"])
+    assert args.dry_run is True
+
+    args = parser.parse_args(["digest-reports", "--dry-run", "--no-dry-run"])
+    assert args.dry_run is False
+
+
+def test_digest_reports_main_forwards_send_email_and_no_dry_run(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    isolate_settings(monkeypatch, tmp_path)
+    clear_settings_cache()
+
+    captured_call: dict[str, object] = {}
+
+    class DummyDigestService:
+        def __init__(self, settings: object) -> None:
+            self.settings = settings
+
+        def generate_digest(self, **kwargs: object) -> tuple[dict[str, object], Path]:
+            captured_call.update(kwargs)
+            return (
+                {
+                    "dry_run": kwargs["dry_run"],
+                    "email_report": {"attempted": False},
+                    "markdown_report_path": str(tmp_path / "digest.md"),
+                    "email_subject": "Digest hebdomadaire",
+                },
+                tmp_path / "digest.json",
+            )
+
+    monkeypatch.setattr("app.main.AffiliateDigestService", DummyDigestService)
+
+    exit_code = main(
+        [
+            "digest-reports",
+            "--reports-root",
+            str(tmp_path),
+            "--no-dry-run",
+            "--send-email",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_call["dry_run"] is False
+    assert captured_call["send_email"] is True
+    assert "markdown_report_path=" in captured.out

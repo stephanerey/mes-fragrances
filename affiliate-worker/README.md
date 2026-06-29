@@ -481,10 +481,10 @@ The weekly wrapper:
   `AFFILIATE_DIGEST_SEND_EMAIL=false`;
 - treats explicit CLI flags `--dry-run`, `--no-dry-run`, and `--send-email` as
   overrides over those environment defaults;
-- `AFFILIATE_DIGEST_DRY_RUN=true` maps to the wrapper's dry-run mode, while
-  `AFFILIATE_DIGEST_DRY_RUN=false` enables a non-dry-run digest execution;
-- `AFFILIATE_DIGEST_SEND_EMAIL=true` maps to the wrapper's `--send-email`
-  behavior, while `false` keeps host-side delivery disabled;
+- forwards `AFFILIATE_DIGEST_DRY_RUN=true` as `digest-reports --dry-run` and
+  `AFFILIATE_DIGEST_DRY_RUN=false` as `digest-reports --no-dry-run`;
+- forwards `AFFILIATE_DIGEST_SEND_EMAIL=true` as `digest-reports --send-email`,
+  while `false` keeps that flag absent;
 - sends the digest through the host MTA only when explicitly enabled and the
   wrapper is called with `--no-dry-run --send-email`;
 - does not modify systemd on its own.

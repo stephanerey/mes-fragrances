@@ -29,9 +29,9 @@ Defaults:
   AFFILIATE_DIGEST_SEND_EMAIL=false
 
 Flags:
-  --dry-run       Generate the digest inside Docker without sending host email.
-  --no-dry-run    Generate the digest without the dry-run flag.
-  --send-email    Allow host-side delivery, but only when --no-dry-run is also set.
+  --dry-run       Generate the digest inside Docker with digest-reports --dry-run.
+  --no-dry-run    Generate the digest inside Docker with digest-reports --no-dry-run.
+  --send-email    Forward --send-email to digest-reports and allow host-side delivery.
 
 Explicit CLI flags override the corresponding environment defaults.
 EOF
@@ -90,6 +90,18 @@ parse_args() {
     esac
     shift
   done
+}
+
+append_digest_mode_flags() {
+  if [ "$DRY_RUN" = true ]; then
+    digest_cmd+=(--dry-run)
+  else
+    digest_cmd+=(--no-dry-run)
+  fi
+
+  if [ "$SEND_EMAIL" = true ]; then
+    digest_cmd+=(--send-email)
+  fi
 }
 
 send_digest_email_if_configured() {
@@ -186,9 +198,7 @@ main() {
     --output-dir "$digest_dir_container"
     --email-subject "$digest_subject"
   )
-  if [ "$DRY_RUN" = true ]; then
-    digest_cmd+=(--dry-run)
-  fi
+  append_digest_mode_flags
 
   set +e
   digest_output="$("${digest_cmd[@]}" 2>&1)"
