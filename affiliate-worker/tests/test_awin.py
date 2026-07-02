@@ -249,6 +249,36 @@ def test_compare_columns_reports_missing_fields() -> None:
     assert "brand_name" in coverage["recommended_columns_missing"]
 
 
+def test_compare_columns_supports_flaconi_profile() -> None:
+    coverage = compare_columns(
+        [
+            "data_feed_id",
+            "merchant_id",
+            "merchant_name",
+            "aw_product_id",
+            "aw_deep_link",
+            "category_id",
+            "category_name",
+            "brand_name",
+            "merchant_product_id",
+            "merchant_category",
+            "ean",
+            "product_name",
+            "description",
+            "merchant_deep_link",
+            "merchant_image_url",
+            "currency",
+            "search_price",
+        ],
+        advertiser_id="87361",
+        feed_id="97463",
+    )
+
+    assert coverage["required_columns_missing"] == []
+    assert "display_price" in coverage["required_columns_present"]
+    assert "product_GTIN" not in coverage["robust_matching_columns_missing"]
+
+
 def test_awin_download_feed_writes_report_with_column_coverage(tmp_path: Path) -> None:
     settings = build_settings(tmp_path)
     feed_list_url = build_feed_list_url("feed-key")

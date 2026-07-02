@@ -21,7 +21,7 @@ from app.awin import (
     parse_download_url_metadata,
     redact_url,
 )
-from app.awin_feed_mapping import compare_columns
+from app.awin_feed_mapping import canonicalize_row, compare_columns
 from app.config import Settings
 from app.reporting import try_write_report, write_report
 
@@ -43,6 +43,26 @@ CATEGORY_PATH_FIELDS = (
     "merchant_product_second_category",
     "merchant_product_third_category",
 )
+FRAGRANCE_CATEGORY_ALIASES = {
+    "fragrance",
+    "fragrances",
+    "parfum",
+    "parfums",
+    "perfume",
+    "perfumes",
+    "duft",
+    "damenduft",
+    "herrenduft",
+}
+FRAGRANCE_CATEGORY_EXCLUDED_PHRASES = {
+    "parfum d ambiance",
+    "parfum d'ambiance",
+    "diffuseur de parfum",
+    "coffret de parfum d ambiance",
+    "brule parfum",
+    "parfum cheveux",
+    "hair perfume",
+}
 CONCENTRATION_PATTERNS = (
     (r"\bextrait de parfum\b|\bperfume extract\b|\bextrait\b", "EXTRAIT"),
     (r"\beau de parfum\b|\bedp\b", "EDP"),
@@ -60,10 +80,21 @@ EXCLUSION_KEYWORDS = {
         "shower gel",
         "lait corps",
         "body lotion",
+        "body mist",
+        "hair mist",
+        "hair perfume",
+        "parfum cheveux",
         "deodorant",
         "diffuseur",
         "bougie",
         "candle",
+    ),
+    "home_fragrance": (
+        "parfum d'ambiance",
+        "parfum d ambiance",
+        "diffuseur de parfum",
+        "brule parfum",
+        "room spray",
     ),
 }
 
@@ -211,6 +242,24 @@ def _is_non_empty(value: str | None) -> bool:
     return bool(value and value.strip())
 
 
+def normalize_category(category_name: str | None, merchant_category: str | None = None) -> str:
+    primary = normalize_text(category_name)
+    if primary:
+        return primary
+    return normalize_text(merchant_category)
+
+
+def is_fragrance_category(category_name: str | None, merchant_category: str | None = None) -> bool:
+    normalized_category = normalize_category(category_name, merchant_category)
+    if any(phrase in normalized_category for phrase in FRAGRANCE_CATEGORY_EXCLUDED_PHRASES):
+        return False
+    if normalized_category in FRAGRANCE_CATEGORY_ALIASES:
+        return True
+
+    tokens = set(normalized_category.split())
+    return bool(tokens & FRAGRANCE_CATEGORY_ALIASES)
+
+
 def _read_csv_payload(
     payload: bytes,
     delimiter_hint: str | None = None,
@@ -298,7 +347,19 @@ class FeedPreprocessor:
                 source.payload,
                 delimiter_hint=source.delimiter_hint,
             )
-            coverage = compare_columns(header)
+            rows = [
+                canonicalize_row(
+                    row,
+                    advertiser_id=advertiser_id,
+                    feed_id=feed_id,
+                )
+                for row in rows
+            ]
+            coverage = compare_columns(
+                header,
+                advertiser_id=advertiser_id,
+                feed_id=feed_id,
+            )
             metrics = self._build_metrics(rows)
             decision = self._build_decision(coverage, metrics)
 
@@ -470,7 +531,10 @@ class FeedPreprocessor:
 
         for row in rows:
             category_name = row.get("category_name")
-            is_fragrance = normalize_text(category_name) == "fragrance"
+            is_fragrance = is_fragrance_category(
+                category_name,
+                row.get("merchant_category") or row.get("product_type"),
+            )
             if is_fragrance:
                 rows_fragrance += 1
 
@@ -532,7 +596,7 @@ class FeedPreprocessor:
                 and has_affiliate_url
                 and has_valid_price
                 and has_brand_name
-                and volume_ml is not None
+                and (volume_ml is not None or has_any_identifier)
                 and not exclusion_reasons
             ):
                 estimated_matchable_rows += 1
@@ -617,10 +681,9 @@ class FeedPreprocessor:
             "offer_url_price_coverage": coverage_level(offer_url_price_percent),
         }
 
-        if (
-            coverage["required_columns_missing"]
-            or coverage["robust_matching_columns_missing"]
-        ):
+        if coverage["required_columns_missing"]:
+            recommendation = "adjust_awin_columns"
+        elif identifier_percent <= 0:
             recommendation = "adjust_awin_columns"
         elif any(
             decision[key] == "low"

@@ -408,7 +408,11 @@ class AwinService:
                 )
             payload = self.fetcher(selected_download_url)
             inspection = inspect_gzip_csv(payload, delimiter_hint=metadata["delimiter"])
-            coverage = compare_columns(inspection.header)
+            coverage = compare_columns(
+                inspection.header,
+                advertiser_id=advertiser_id,
+                feed_id=feed_id,
+            )
 
             report.update(
                 {

@@ -326,6 +326,176 @@ def build_gzip_bytes() -> bytes:
     return gzip.compress(build_csv_bytes())
 
 
+def build_flaconi_csv_bytes() -> bytes:
+    header = [
+        "data_feed_id",
+        "merchant_id",
+        "merchant_name",
+        "aw_product_id",
+        "aw_deep_link",
+        "aw_image_url",
+        "aw_thumb_url",
+        "category_id",
+        "category_name",
+        "brand_id",
+        "brand_name",
+        "merchant_product_id",
+        "merchant_category",
+        "ean",
+        "product_name",
+        "description",
+        "merchant_deep_link",
+        "merchant_image_url",
+        "delivery_time",
+        "currency",
+        "search_price",
+        "store_price",
+        "rrp_price",
+        "delivery_cost",
+        "in_stock",
+        "product_type",
+        "colour",
+        "base_price",
+        "base_price_amount",
+        "base_price_text",
+    ]
+    rows = [
+        {
+            "data_feed_id": "97463",
+            "merchant_id": "87361",
+            "merchant_name": "Flaconi FR",
+            "aw_product_id": "1001",
+            "aw_deep_link": "https://awin.test/flaconi-edp",
+            "aw_image_url": "https://images.test/flaconi-edp.jpg",
+            "aw_thumb_url": "https://images.test/flaconi-edp-thumb.jpg",
+            "category_id": "",
+            "category_name": "",
+            "brand_id": "DG",
+            "brand_name": "Dolce & Gabbana",
+            "merchant_product_id": "flaconi-1001",
+            "merchant_category": "Eau de parfum",
+            "ean": "1234567890123",
+            "product_name": "Dolce & Gabbana Devotion Eau de parfum 50 ml",
+            "description": "Parfum floral 50 ml",
+            "merchant_deep_link": "https://merchant.test/flaconi-edp",
+            "merchant_image_url": "https://merchant.test/flaconi-edp.jpg",
+            "delivery_time": "4-5 jours",
+            "currency": "EUR",
+            "search_price": "84.99",
+            "store_price": "false",
+            "rrp_price": "99.99",
+            "delivery_cost": "0.00",
+            "in_stock": "1",
+            "product_type": "Eau de parfum",
+            "colour": "",
+            "base_price": "1699.80",
+            "base_price_amount": "1000",
+            "base_price_text": "ml",
+        },
+        {
+            "data_feed_id": "97463",
+            "merchant_id": "87361",
+            "merchant_name": "Flaconi FR",
+            "aw_product_id": "1002",
+            "aw_deep_link": "https://awin.test/flaconi-home",
+            "aw_image_url": "https://images.test/flaconi-home.jpg",
+            "aw_thumb_url": "https://images.test/flaconi-home-thumb.jpg",
+            "category_id": "",
+            "category_name": "",
+            "brand_id": "MF",
+            "brand_name": "Millefiori Milano",
+            "merchant_product_id": "flaconi-1002",
+            "merchant_category": "Parfum d'ambiance",
+            "ean": "2234567890123",
+            "product_name": "Millefiori Milano Natural Sandalo Bergamotto Parfum d'ambiance",
+            "description": "Diffuseur pour la maison",
+            "merchant_deep_link": "https://merchant.test/flaconi-home",
+            "merchant_image_url": "https://merchant.test/flaconi-home.jpg",
+            "delivery_time": "4-5 jours",
+            "currency": "EUR",
+            "search_price": "29.99",
+            "store_price": "false",
+            "rrp_price": "29.99",
+            "delivery_cost": "3.95",
+            "in_stock": "1",
+            "product_type": "Parfum d'ambiance",
+            "colour": "",
+            "base_price": "299.90",
+            "base_price_amount": "1000",
+            "base_price_text": "ml",
+        },
+        {
+            "data_feed_id": "97463",
+            "merchant_id": "87361",
+            "merchant_name": "Flaconi FR",
+            "aw_product_id": "1003",
+            "aw_deep_link": "https://awin.test/flaconi-hair",
+            "aw_image_url": "https://images.test/flaconi-hair.jpg",
+            "aw_thumb_url": "https://images.test/flaconi-hair-thumb.jpg",
+            "category_id": "",
+            "category_name": "",
+            "brand_id": "BYR",
+            "brand_name": "Byredo",
+            "merchant_product_id": "flaconi-1003",
+            "merchant_category": "Parfum cheveux",
+            "ean": "3234567890123",
+            "product_name": "Byredo Blanche Hair Mist 75 ml",
+            "description": "Hair perfume 75 ml",
+            "merchant_deep_link": "https://merchant.test/flaconi-hair",
+            "merchant_image_url": "https://merchant.test/flaconi-hair.jpg",
+            "delivery_time": "4-5 jours",
+            "currency": "EUR",
+            "search_price": "64.00",
+            "store_price": "false",
+            "rrp_price": "64.00",
+            "delivery_cost": "0.00",
+            "in_stock": "1",
+            "product_type": "Parfum cheveux",
+            "colour": "",
+            "base_price": "853.33",
+            "base_price_amount": "1000",
+            "base_price_text": "ml",
+        },
+        {
+            "data_feed_id": "97463",
+            "merchant_id": "87361",
+            "merchant_name": "Flaconi FR",
+            "aw_product_id": "1004",
+            "aw_deep_link": "https://awin.test/flaconi-makeup",
+            "aw_image_url": "https://images.test/flaconi-makeup.jpg",
+            "aw_thumb_url": "https://images.test/flaconi-makeup-thumb.jpg",
+            "category_id": "",
+            "category_name": "",
+            "brand_id": "SMB",
+            "brand_name": "Smashbox",
+            "merchant_product_id": "flaconi-1004",
+            "merchant_category": "Rouge à lèvres",
+            "ean": "4234567890123",
+            "product_name": "Smashbox Always On Rouge à lèvres",
+            "description": "Couleur intense",
+            "merchant_deep_link": "https://merchant.test/flaconi-makeup",
+            "merchant_image_url": "https://merchant.test/flaconi-makeup.jpg",
+            "delivery_time": "4-5 jours",
+            "currency": "EUR",
+            "search_price": "19.99",
+            "store_price": "false",
+            "rrp_price": "24.99",
+            "delivery_cost": "3.95",
+            "in_stock": "1",
+            "product_type": "Rouge à lèvres",
+            "colour": "Rouge",
+            "base_price": "1999.00",
+            "base_price_amount": "1000",
+            "base_price_text": "g",
+        },
+    ]
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=header)
+    writer.writeheader()
+    writer.writerows(rows)
+    return gzip.compress(buffer.getvalue().encode("utf-8"))
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -455,6 +625,27 @@ def test_preprocess_feed_with_local_gzip_csv(tmp_path: Path) -> None:
 
     assert report["compression"] == "gzip"
     assert report["rows_total"] == 4
+
+
+def test_preprocess_feed_supports_flaconi_profile(tmp_path: Path) -> None:
+    csv_path = tmp_path / "flaconi.csv.gz"
+    csv_path.write_bytes(build_flaconi_csv_bytes())
+
+    report, _ = FeedPreprocessor(build_settings(tmp_path)).preprocess_feed(
+        advertiser_id="87361",
+        feed_id="97463",
+        path=csv_path,
+    )
+
+    assert report["status"] == "success"
+    assert report["missing_required_columns"] == []
+    assert report["rows_total"] == 4
+    assert report["rows_fragrance"] == 1
+    assert report["rows_with_valid_price"] == 4
+    assert report["rows_with_any_identifier"] == 4
+    assert report["rows_with_affiliate_url"] == 4
+    assert report["estimated_matchable_rows"] == 1
+    assert report["category_counts"]["Eau de parfum"] == 1
 
 
 def test_preprocess_feed_with_configured_url(tmp_path: Path) -> None:

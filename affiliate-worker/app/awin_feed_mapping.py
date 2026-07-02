@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Mapping
+
 """Column expectations derived from docs/prd/affiliate-system/20_data/awin_feed_mapping.md."""
 
 REQUIRED_COLUMNS = [
@@ -141,9 +143,103 @@ RECOMMENDED_COLUMNS = [
     "basket_link",
 ]
 
+FLACONI_FR_PROFILE_KEY = ("87361", "97463")
 
-def compare_columns(header: list[str]) -> dict[str, list[str]]:
-    header_set = {column.strip() for column in header if column.strip()}
+PROFILE_DERIVED_COLUMNS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
+    FLACONI_FR_PROFILE_KEY: {
+        "display_price": ("search_price", "rrp_price", "store_price"),
+        "category_name": ("merchant_category", "product_type"),
+        "product_GTIN": ("ean",),
+        "large_image": ("merchant_image_url", "aw_image_url"),
+        "merchant_thumb_url": ("aw_thumb_url", "merchant_image_url"),
+    }
+}
+
+
+def profile_name(advertiser_id: str | None = None, feed_id: str | None = None) -> str:
+    if (str(advertiser_id or ""), str(feed_id or "")) == FLACONI_FR_PROFILE_KEY:
+        return "flaconi_fr"
+    return "default"
+
+
+def _derived_columns_for(
+    advertiser_id: str | None = None,
+    feed_id: str | None = None,
+) -> dict[str, tuple[str, ...]]:
+    return PROFILE_DERIVED_COLUMNS.get(
+        (str(advertiser_id or ""), str(feed_id or "")),
+        {},
+    )
+
+
+def _is_usable_value(target_column: str, value: str | None) -> bool:
+    if value is None:
+        return False
+
+    normalized = value.strip()
+    if not normalized:
+        return False
+
+    if target_column in {"display_price", "search_price", "store_price", "rrp_price"}:
+        return normalized.lower() not in {"false", "n/a", "null"}
+
+    return True
+
+
+def canonicalize_header(
+    header: list[str],
+    *,
+    advertiser_id: str | None = None,
+    feed_id: str | None = None,
+) -> list[str]:
+    canonical = [column.strip() for column in header if column and column.strip()]
+    canonical_set = set(canonical)
+    for target_column, source_columns in _derived_columns_for(advertiser_id, feed_id).items():
+        if target_column in canonical_set:
+            continue
+        if any(source_column in canonical_set for source_column in source_columns):
+            canonical.append(target_column)
+            canonical_set.add(target_column)
+    return canonical
+
+
+def canonicalize_row(
+    row: Mapping[str, str],
+    *,
+    advertiser_id: str | None = None,
+    feed_id: str | None = None,
+) -> dict[str, str]:
+    canonical = {
+        str(key).strip(): (value if value is not None else "")
+        for key, value in row.items()
+        if key is not None and str(key).strip()
+    }
+
+    for target_column, source_columns in _derived_columns_for(advertiser_id, feed_id).items():
+        if _is_usable_value(target_column, canonical.get(target_column)):
+            continue
+        for source_column in source_columns:
+            value = canonical.get(source_column)
+            if _is_usable_value(target_column, value):
+                canonical[target_column] = value
+                break
+
+    return canonical
+
+
+def compare_columns(
+    header: list[str],
+    *,
+    advertiser_id: str | None = None,
+    feed_id: str | None = None,
+) -> dict[str, list[str]]:
+    header_set = set(
+        canonicalize_header(
+            header,
+            advertiser_id=advertiser_id,
+            feed_id=feed_id,
+        )
+    )
     return {
         "required_columns_present": [
             column for column in REQUIRED_COLUMNS if column in header_set

@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 from psycopg.types.json import Jsonb
 
-from app.awin_feed_mapping import compare_columns
+from app.awin_feed_mapping import canonicalize_row, compare_columns
 from app.config import Settings
 from app.db import DatabaseService, DbCommandError
 from app.reporting import try_write_report, write_report
@@ -37,6 +37,18 @@ FRAGRANCE_CATEGORY_ALIASES = {
     "parfums",
     "perfume",
     "perfumes",
+    "duft",
+    "damenduft",
+    "herrenduft",
+}
+FRAGRANCE_CATEGORY_EXCLUDED_PHRASES = {
+    "parfum d ambiance",
+    "parfum d'ambiance",
+    "diffuseur de parfum",
+    "coffret de parfum d ambiance",
+    "brule parfum",
+    "parfum cheveux",
+    "hair perfume",
 }
 EXCLUSION_KEYWORDS = {
     "set_or_bundle": ("coffret", "set", "duo", "trio"),
@@ -47,10 +59,23 @@ EXCLUSION_KEYWORDS = {
         "shower gel",
         "lait corps",
         "body lotion",
+        "body mist",
+        "hair mist",
+        "hair perfume",
+        "parfum cheveux",
         "deodorant",
         "deodorant spray",
     ),
-    "home_fragrance": ("diffuseur", "bougie", "candle"),
+    "home_fragrance": (
+        "diffuseur",
+        "bougie",
+        "candle",
+        "parfum d'ambiance",
+        "parfum d ambiance",
+        "diffuseur de parfum",
+        "brule parfum",
+        "room spray",
+    ),
 }
 CONCENTRATION_PATTERNS = (
     (r"\bextrait de parfum\b|\bperfume extract\b|\bextrait\b", "extrait"),
@@ -369,6 +394,8 @@ def normalize_category(category_name: str | None, merchant_category: str | None 
 
 def is_fragrance_category(category_name: str | None, merchant_category: str | None = None) -> bool:
     normalized_category = normalize_category(category_name, merchant_category)
+    if any(phrase in normalized_category for phrase in FRAGRANCE_CATEGORY_EXCLUDED_PHRASES):
+        return False
     if normalized_category in FRAGRANCE_CATEGORY_ALIASES:
         return True
 
@@ -451,12 +478,18 @@ class NormalizationService:
                         for key in dict(row["raw_payload"]).keys()
                     }
                 )
-                column_report = compare_columns(header_columns)
+                column_report = compare_columns(
+                    header_columns,
+                    advertiser_id=str(advertiser_row["network_advertiser_id"]),
+                    feed_id=str(affiliate_feed_row["network_feed_id"]),
+                )
                 normalized_rows = [
                     self._normalize_row(
                         raw_row,
                         advertiser_db_id=int(advertiser_row["id"]),
                         affiliate_feed_db_id=int(affiliate_feed_row["id"]),
+                        advertiser_id=str(advertiser_row["network_advertiser_id"]),
+                        feed_id=str(affiliate_feed_row["network_feed_id"]),
                         missing_required_columns=column_report["required_columns_missing"],
                         missing_recommended_columns=column_report[
                             "recommended_columns_missing"
@@ -650,13 +683,19 @@ class NormalizationService:
         *,
         advertiser_db_id: int,
         affiliate_feed_db_id: int,
+        advertiser_id: str,
+        feed_id: str,
         missing_required_columns: list[str],
         missing_recommended_columns: list[str],
     ) -> NormalizedFeedItem:
-        payload = {
-            str(key): str(value) if value is not None else ""
-            for key, value in dict(raw_row["raw_payload"]).items()
-        }
+        payload = canonicalize_row(
+            {
+                str(key): str(value) if value is not None else ""
+                for key, value in dict(raw_row["raw_payload"]).items()
+            },
+            advertiser_id=advertiser_id,
+            feed_id=feed_id,
+        )
 
         title = (payload.get("product_name") or "").strip()
         description = (payload.get("description") or "").strip() or None

@@ -22,7 +22,7 @@ from app.awin import (
     parse_download_url_metadata,
     redact_url,
 )
-from app.awin_feed_mapping import compare_columns
+from app.awin_feed_mapping import canonicalize_row, compare_columns
 from app.config import Settings
 from app.db import DatabaseService, DbCommandError
 from app.reporting import try_write_report, write_report
@@ -244,8 +244,20 @@ class RawStagingService:
                 source.payload,
                 delimiter_hint=source.delimiter_hint,
             )
+            rows = [
+                canonicalize_row(
+                    row,
+                    advertiser_id=advertiser_id,
+                    feed_id=feed_id,
+                )
+                for row in rows
+            ]
             source_sha256 = calculate_sha256(source.payload)
-            column_report = compare_columns(header)
+            column_report = compare_columns(
+                header,
+                advertiser_id=advertiser_id,
+                feed_id=feed_id,
+            )
             rows_missing_stable_external_ids = sum(
                 1
                 for row in rows

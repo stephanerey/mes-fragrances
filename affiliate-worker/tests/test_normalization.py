@@ -372,6 +372,10 @@ def test_select_affiliate_url_priority() -> None:
 def test_fragrance_category_filter() -> None:
     assert is_fragrance_category("Fragrance", None) is True
     assert is_fragrance_category("Parfum", None) is True
+    assert is_fragrance_category("", "Eau de parfum") is True
+    assert is_fragrance_category("", "Damenduft") is True
+    assert is_fragrance_category("", "Parfum d'ambiance") is False
+    assert is_fragrance_category("", "Parfum cheveux") is False
     assert is_fragrance_category("Home", None) is False
 
 
@@ -382,6 +386,16 @@ def test_detect_exclusion_reasons() -> None:
     )
 
     assert reasons == ["set_or_bundle", "tester", "refill", "body_product", "home_fragrance"]
+
+
+def test_detect_exclusion_reasons_for_flaconi_hair_mist() -> None:
+    reasons = detect_exclusion_reasons(
+        "Byredo Blanche Hair Mist 75 ml",
+        "Hair perfume 75 ml",
+        "Parfum cheveux",
+    )
+
+    assert "body_product" in reasons
 
 
 def test_brand_fallback_behavior() -> None:
