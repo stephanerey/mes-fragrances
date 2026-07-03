@@ -12,8 +12,11 @@ from app.flaconi_grouped_matching import (
     _best_catalog_candidates,
     _build_catalog_indexes,
     _classify_group,
+    _decimal_to_string,
     _group_id,
     _group_key,
+    _price_to_string,
+    _source_row_to_dict,
 )
 from app.matching import CatalogPerfume, build_perfume_match_key
 
@@ -121,6 +124,29 @@ def test_duplicate_same_product_rows_share_group_key() -> None:
         external_id="222",
     )
     assert _group_key(first) == _group_key(second)
+
+
+def test_decimal_to_string_preserves_integer_trailing_zeros_for_prices() -> None:
+    assert _price_to_string(Decimal("210.00")) == "210.00"
+    assert _price_to_string(Decimal("200.00")) == "200.00"
+    assert _price_to_string(Decimal("280.00")) == "280.00"
+    assert _price_to_string(Decimal("21.00")) == "21.00"
+    assert _price_to_string(Decimal("34.90")) == "34.90"
+    assert _price_to_string(Decimal("134.40")) == "134.40"
+    assert _decimal_to_string(Decimal("100.00")) == "100"
+
+
+def test_grouped_offer_serialization_keeps_bello_rabelo_price() -> None:
+    row = make_row(
+        product_id="1",
+        brand="Liquides Imaginaires",
+        name="Liquides Imaginaires Bello Rabelo Eau de parfum 100 ml",
+        concentration="edp",
+        volume_ml=Decimal("100"),
+        price="210.00",
+        external_id="111",
+    )
+    assert _source_row_to_dict(row)["price"] == "210.00"
 
 
 def test_same_name_different_volumes_stay_in_distinct_groups() -> None:

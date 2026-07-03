@@ -172,7 +172,16 @@ def _gender_equivalent(source_text: str | None, catalog_gender: str | None) -> b
 def _decimal_to_string(value: Decimal | None) -> str:
     if value is None:
         return ""
-    return format(value.normalize(), "f").rstrip("0").rstrip(".") or "0"
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _price_to_string(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    return format(value.quantize(Decimal("0.01")), "f")
 
 
 def _parse_volume_from_fields(row: Mapping[str, str]) -> Decimal | None:
@@ -304,7 +313,7 @@ def _source_row_to_dict(row: GroupedSourceRow) -> dict[str, object]:
         "normalized_name": row.normalized_name,
         "concentration": row.concentration or "",
         "volume_ml": _decimal_to_string(row.volume_ml),
-        "price": _decimal_to_string(row.price),
+        "price": _price_to_string(row.price),
         "currency": row.currency,
         "affiliate_url_present": "true" if row.affiliate_url else "false",
         "image_url_present": "true" if row.image_url else "false",
@@ -897,9 +906,9 @@ class FlaconiGroupedMatchingService:
                     "normalized_name": group.representative.normalized_name,
                     "concentration": group.representative.concentration or "",
                     "volume_ml": _decimal_to_string(group.representative.volume_ml),
-                    "price_min": _decimal_to_string(min(prices)),
-                    "price_max": _decimal_to_string(max(prices)),
-                    "representative_price": _decimal_to_string(group.representative.price),
+                    "price_min": _price_to_string(min(prices)),
+                    "price_max": _price_to_string(max(prices)),
+                    "representative_price": _price_to_string(group.representative.price),
                     "representative_currency": group.representative.currency,
                     "representative_affiliate_url_present": "true",
                     "has_multiple_gtin": "true" if len(identifiers) > 1 else "false",
@@ -966,7 +975,7 @@ class FlaconiGroupedMatchingService:
                     "flaconi_product_id": group.representative.flaconi_product_id,
                     "source_brand": group.representative.brand,
                     "source_name": group.representative.source_name,
-                    "source_price": _decimal_to_string(group.representative.price),
+                    "source_price": _price_to_string(group.representative.price),
                     "source_currency": group.representative.currency,
                     "matched_perfume_id": best.perfume.id if best else "",
                     "matched_perfume_brand": best.perfume.brand if best else "",
@@ -989,8 +998,8 @@ class FlaconiGroupedMatchingService:
                     "matched_perfume_has_available_offer": "true"
                     if perfume_state and perfume_state.has_available_offer
                     else "false",
-                    "existing_best_price": _decimal_to_string(current_best_price),
-                    "flaconi_price": _decimal_to_string(flaconi_price),
+                    "existing_best_price": _price_to_string(current_best_price),
+                    "flaconi_price": _price_to_string(flaconi_price),
                     "flaconi_is_cheaper_than_current_best": cheaper,
                     "match_category": group.classification,
                     "match_score": f"{best.score:.3f}" if best else "",
@@ -1050,7 +1059,7 @@ class FlaconiGroupedMatchingService:
                     "feed_id": "97463",
                     "source_brand": group.representative.brand,
                     "source_name": group.representative.source_name,
-                    "source_price": _decimal_to_string(group.representative.price),
+                    "source_price": _price_to_string(group.representative.price),
                     "source_currency": group.representative.currency,
                     "matched_perfume_id": best.perfume.id,
                     "matched_perfume_brand": best.perfume.brand,
@@ -1064,7 +1073,7 @@ class FlaconiGroupedMatchingService:
                     "matched_perfume_has_flaconi_offer": "true"
                     if state and state.has_flaconi_offer
                     else "false",
-                    "current_best_price": _decimal_to_string(current_best_price),
+                    "current_best_price": _price_to_string(current_best_price),
                     "price_relation": price_relation,
                     "match_score": f"{best.score:.3f}",
                     "match_reason": best.method,
@@ -1091,7 +1100,7 @@ class FlaconiGroupedMatchingService:
                     "flaconi_product_id": group.representative.flaconi_product_id,
                     "source_brand": group.representative.brand,
                     "source_name": group.representative.source_name,
-                    "source_price": _decimal_to_string(group.representative.price),
+                    "source_price": _price_to_string(group.representative.price),
                     "matched_perfume_id": best.perfume.id,
                     "matched_perfume_brand": best.perfume.brand,
                     "matched_perfume_name": best.perfume.name,
@@ -1126,7 +1135,7 @@ class FlaconiGroupedMatchingService:
                     "name": group.representative.source_name,
                     "concentration": group.representative.concentration or "",
                     "volume_ml": _decimal_to_string(group.representative.volume_ml),
-                    "price": _decimal_to_string(group.representative.price),
+                    "price": _price_to_string(group.representative.price),
                     "currency": group.representative.currency,
                     "group_classification": group.classification,
                     "risk_flags": ",".join(group.risk_flags),
