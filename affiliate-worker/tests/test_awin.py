@@ -213,6 +213,44 @@ def test_configured_feed_url_supports_multiple_urls() -> None:
     assert second_url == "https://example.test/feed-2"
 
 
+def test_configured_feed_url_falls_back_to_dotenv_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        f"AWIN_FEED_URL_105475_97867={SAMPLE_DOWNLOAD_URL}\n",
+        encoding="utf-8",
+    )
+
+    env_var, configured_url = get_configured_feed_url(
+        advertiser_id="105475",
+        feed_id="97867",
+        environ={},
+    )
+
+    assert env_var == "AWIN_FEED_URL_105475_97867"
+    assert configured_url == SAMPLE_DOWNLOAD_URL
+
+
+def test_configured_feed_url_prefers_explicit_environment_over_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "AWIN_FEED_URL_105475_97867=https://example.test/from-dotenv\n",
+        encoding="utf-8",
+    )
+
+    env_var, configured_url = get_configured_feed_url(
+        advertiser_id="105475",
+        feed_id="97867",
+        environ={"AWIN_FEED_URL_105475_97867": SAMPLE_DOWNLOAD_URL},
+    )
+
+    assert env_var == "AWIN_FEED_URL_105475_97867"
+    assert configured_url == SAMPLE_DOWNLOAD_URL
+
+
 def test_inspect_gzip_csv_parses_header_and_sample_rows() -> None:
     inspection = inspect_gzip_csv(build_gzip_feed(), delimiter_hint=",")
 
@@ -279,7 +317,10 @@ def test_compare_columns_supports_flaconi_profile() -> None:
     assert "product_GTIN" not in coverage["robust_matching_columns_missing"]
 
 
-def test_awin_download_feed_writes_report_with_column_coverage(tmp_path: Path) -> None:
+def test_awin_download_feed_writes_report_with_column_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     settings = build_settings(tmp_path)
     feed_list_url = build_feed_list_url("feed-key")
     fetcher = FakeFetcher(
@@ -328,7 +369,10 @@ def test_awin_download_feed_uses_configured_url_before_feed_list(tmp_path: Path)
     assert report["feed_found"] is True
 
 
-def test_awin_download_feed_falls_back_to_feed_list_url(tmp_path: Path) -> None:
+def test_awin_download_feed_falls_back_to_feed_list_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     settings = build_settings(tmp_path)
     feed_list_url = build_feed_list_url("feed-key")
     fetcher = FakeFetcher(
@@ -370,7 +414,10 @@ def test_configured_feed_url_is_redacted_in_report(tmp_path: Path) -> None:
     assert "super-secret" not in json.dumps(saved)
 
 
-def test_awin_download_feed_failure_writes_error_report(tmp_path: Path) -> None:
+def test_awin_download_feed_failure_writes_error_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     settings = build_settings(tmp_path)
     feed_list_url = build_feed_list_url("feed-key")
     fetcher = FakeFetcher(

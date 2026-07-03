@@ -668,7 +668,10 @@ def test_preprocess_feed_with_configured_url(tmp_path: Path) -> None:
     assert "secret-feed-key" not in json.dumps(saved)
 
 
-def test_preprocess_feed_falls_back_to_feed_list(tmp_path: Path) -> None:
+def test_preprocess_feed_falls_back_to_feed_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     settings = build_settings(tmp_path)
     feed_list_url = build_feed_list_url("feed-key")
     fetcher = FakeFetcher(
@@ -689,7 +692,10 @@ def test_preprocess_feed_falls_back_to_feed_list(tmp_path: Path) -> None:
     assert report["remote_last_imported"] == "2026-05-21 12:00:00"
 
 
-def test_preprocess_feed_missing_credentials_without_configured_url(tmp_path: Path) -> None:
+def test_preprocess_feed_missing_credentials_without_configured_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     settings = build_settings(tmp_path, api_key="")
 
     with pytest.raises(AwinCommandError) as exc_info:

@@ -15,6 +15,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from dotenv import dotenv_values
+
 from app.awin_feed_mapping import compare_columns
 from app.config import Settings
 from app.reporting import try_write_report, write_report
@@ -124,7 +126,14 @@ def get_configured_feed_url(
     env_var = build_configured_feed_url_env_var(advertiser_id, feed_id)
     env = environ if environ is not None else os.environ
     configured_url = env.get(env_var)
-    return env_var, configured_url.strip() if configured_url and configured_url.strip() else None
+    if configured_url and configured_url.strip():
+        return env_var, configured_url.strip()
+
+    dotenv_url = dotenv_values(".env").get(env_var)
+    if isinstance(dotenv_url, str) and dotenv_url.strip():
+        return env_var, dotenv_url.strip()
+
+    return env_var, None
 
 
 def parse_feed_list_csv(payload: bytes) -> list[AwinFeedEntry]:
