@@ -26,6 +26,11 @@ from app.digest import (
     DigestError,
     format_digest_report_summary,
 )
+from app.flaconi_grouped_matching import (
+    FlaconiGroupedMatchingError,
+    FlaconiGroupedMatchingService,
+    format_grouped_matching_summary,
+)
 from app.logging_config import configure_logging
 from app.matching import (
     MatchingError,
@@ -81,6 +86,18 @@ def build_parser() -> argparse.ArgumentParser:
     preprocess_feed.add_argument("--advertiser", required=True)
     preprocess_feed.add_argument("--feed-id", required=True)
     preprocess_feed.add_argument("--path", type=Path)
+
+    grouped_flaconi = subparsers.add_parser(
+        "flaconi-grouped-dry-run",
+        help=(
+            "Build a grouped, deduplicated Flaconi-only inventory and catalog matching "
+            "report without any DB writes."
+        ),
+    )
+    grouped_flaconi.add_argument("--advertiser", required=True)
+    grouped_flaconi.add_argument("--feed-id", required=True)
+    grouped_flaconi.add_argument("--path", type=Path)
+    grouped_flaconi.add_argument("--report-dir", type=Path, required=True)
 
     normalize_feed = subparsers.add_parser(
         "normalize-feed",
@@ -304,6 +321,18 @@ def run_preprocess_feed(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_flaconi_grouped_dry_run(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    report, report_path = FlaconiGroupedMatchingService(settings).analyze(
+        advertiser_id=str(args.advertiser),
+        feed_id=str(args.feed_id),
+        report_dir=args.report_dir,
+        path=args.path,
+    )
+    print(format_grouped_matching_summary(report, report_path))
+    return 0
+
+
 def run_normalize_feed(args: argparse.Namespace) -> int:
     settings = get_settings()
     report, report_path = NormalizationService(settings).normalize_feed(
@@ -485,6 +514,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_awin_download_feed(args)
         if args.command == "preprocess-feed":
             return run_preprocess_feed(args)
+        if args.command == "flaconi-grouped-dry-run":
+            return run_flaconi_grouped_dry_run(args)
         if args.command == "normalize-feed":
             return run_normalize_feed(args)
         if args.command == "match-offers":
@@ -515,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
         RawStagingError,
         NormalizationError,
         MatchingError,
+        FlaconiGroupedMatchingError,
         CandidateError,
         DigestError,
     ) as exc:
