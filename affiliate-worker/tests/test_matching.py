@@ -249,6 +249,45 @@ def test_build_perfume_match_key() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("title", "brand", "concentration", "volume_ml", "expected"),
+    [
+        ("Aigner Debut Eau de Parfum 100 ml", "Aigner", "edp", Decimal("100.00"), "debut"),
+        ("Memo Paris Kedu Eau de Parfum 10 ml", "Memo Paris", "edp", Decimal("10.00"), "kedu"),
+        (
+            "ELEVEN LEGENDS Limited Edition Extrait 80 ml",
+            "ELEVEN LEGENDS",
+            None,
+            Decimal("80.00"),
+            "limited edition extrait",
+        ),
+        (
+            "Van Cleef & Arpels Orchidee Vanille Eau de Parfum 75 ml",
+            "Van Cleef & Arpels",
+            "edp",
+            Decimal("75.00"),
+            "orchidee vanille",
+        ),
+    ],
+)
+def test_build_perfume_match_key_handles_integer_volumes_without_truncating(
+    title: str,
+    brand: str,
+    concentration: str | None,
+    volume_ml: Decimal,
+    expected: str,
+) -> None:
+    assert (
+        build_perfume_match_key(
+            title,
+            brand=brand,
+            concentration=concentration,
+            volume_ml=volume_ml,
+        )
+        == expected
+    )
+
+
 def test_brand_compatible() -> None:
     assert brand_compatible("Lancôme", "Lancome") is True
     assert brand_compatible("Lancome", "Dior") is False

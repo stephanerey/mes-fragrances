@@ -171,7 +171,7 @@ def build_perfume_match_key(
         text = re.sub(pattern, " ", text)
 
     if volume_ml is not None:
-        volume_text = format(volume_ml.normalize(), "f").rstrip("0").rstrip(".")
+        volume_text = _format_volume_ml_text(volume_ml)
         if volume_text:
             text = re.sub(rf"\b{re.escape(volume_text)}\b", " ", text)
 
@@ -180,6 +180,13 @@ def build_perfume_match_key(
 
     text = re.sub(r"\b(?:ml|cl|l|oz)\b", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _format_volume_ml_text(volume_ml: Decimal) -> str:
+    quantized = volume_ml.quantize(Decimal("0.01"))
+    if quantized == quantized.to_integral():
+        return str(int(quantized))
+    return format(quantized.normalize(), "f").rstrip("0").rstrip(".")
 
 
 def token_set_score(left: str, right: str) -> float:
