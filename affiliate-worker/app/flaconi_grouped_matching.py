@@ -326,6 +326,112 @@ def _source_row_to_dict(row: GroupedSourceRow) -> dict[str, object]:
     }
 
 
+def _normalize_concentration_hint(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = normalize_text(value)
+    if normalized in {"edp", "edt", "edc", "parfum", "extrait", "eau fraiche"}:
+        return normalized.replace(" ", "_")
+    return parse_concentration(value)
+
+
+def _target_concentration_hint(perfume: CatalogPerfume) -> str | None:
+    return _normalize_concentration_hint(perfume.concentration) or _normalize_concentration_hint(
+        perfume.name
+    )
+
+
+def _choose_stable_candidate(rows: list[dict[str, object]]) -> dict[str, object]:
+    def _sort_key(row: dict[str, object]) -> tuple[Decimal, str]:
+        price_text = str(row.get("source_price") or "0")
+        try:
+            price = Decimal(price_text)
+        except Exception:
+            price = Decimal("0")
+        return (price, str(row.get("group_id") or ""))
+
+    return min(rows, key=_sort_key)
+
+
+def _dedupe_existing_apply_candidates(
+    rows: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["matched_perfume_id"])].append(row)
+
+    ready_rows: list[dict[str, object]] = []
+    blocked_rows: list[dict[str, object]] = []
+    for _target_id, target_rows in grouped.items():
+        if len(target_rows) == 1:
+            ready_rows.append(target_rows[0])
+            continue
+
+        target_hint = _normalize_concentration_hint(
+            str(target_rows[0].get("matched_perfume_concentration_hint") or "")
+        )
+        by_concentration: dict[str, list[dict[str, object]]] = defaultdict(list)
+        for row in target_rows:
+            concentration = _normalize_concentration_hint(
+                str(row.get("source_concentration") or "")
+            )
+            by_concentration[concentration or ""].append(row)
+
+        selected_rows: list[dict[str, object]] = []
+        block_reason = "BLOCKED_OTHER"
+        block_note = "Duplicate target perfume without a safe automatic arbitration."
+
+        if target_hint:
+            matching = by_concentration.get(target_hint, [])
+            if matching:
+                selected_rows.append(_choose_stable_candidate(matching))
+                block_reason = "BLOCKED_DUPLICATE_TARGET"
+                block_note = (
+                    f"Target concentration `{target_hint}` selected the concordant source; "
+                    "other variants stay blocked."
+                )
+            else:
+                block_reason = "BLOCKED_CONCENTRATION_MISMATCH"
+                block_note = (
+                    f"Target concentration `{target_hint}` is explicit, but no source "
+                    "candidate matches it exactly."
+                )
+        elif len({key for key in by_concentration if key}) > 1:
+            block_reason = "BLOCKED_AMBIGUOUS_VARIANTS"
+            block_note = (
+                "Target perfume is generic and source candidates carry distinct "
+                "concentrations; automatic selection would risk merging variants."
+            )
+        else:
+            selected_rows.append(_choose_stable_candidate(target_rows))
+            block_reason = "BLOCKED_DUPLICATE_TARGET"
+            block_note = "Equivalent duplicate target rows collapsed to one stable candidate."
+
+        ready_group_ids = {str(row.get("group_id") or "") for row in selected_rows}
+        for row in selected_rows:
+            ready_rows.append(row)
+        for row in target_rows:
+            if str(row.get("group_id") or "") in ready_group_ids:
+                continue
+            blocked_rows.append(
+                {
+                    **row,
+                    "block_reason": block_reason,
+                    "block_scope": "existing_apply_target_dedup",
+                    "block_note": block_note,
+                }
+            )
+
+    ready_rows.sort(key=lambda row: str(row.get("group_id") or ""))
+    blocked_rows.sort(
+        key=lambda row: (
+            str(row.get("matched_perfume_id") or ""),
+            str(row.get("group_id") or ""),
+        )
+    )
+    return ready_rows, blocked_rows
+
+
 def _catalog_offer_state(
     conn: Any,
     *,
@@ -767,7 +873,9 @@ class FlaconiGroupedMatchingService:
             grouped_inventory_summary_rows = self._grouped_summary_rows(analyzed_groups)
             matches_rows = self._grouped_match_rows(analyzed_groups, offer_state)
             matches_summary_rows = self._grouped_match_summary_rows(analyzed_groups)
-            phase1_ready_rows = self._phase1_ready_rows(analyzed_groups, offer_state)
+            phase1_ready_rows, phase1_blocked_rows = self._phase1_existing_rows(
+                analyzed_groups, offer_state
+            )
             phase2_review_rows = self._phase2_review_rows(analyzed_groups, offer_state)
             phase3_new_rows = self._phase3_new_rows(analyzed_groups)
             blocked_rows = self._blocked_rows(analyzed_groups)
@@ -777,6 +885,7 @@ class FlaconiGroupedMatchingService:
             matches_path = report_dir / "grouped_matches_all_catalog.csv"
             matches_summary_path = report_dir / "grouped_matches_all_catalog_summary.csv"
             phase1_ready_path = report_dir / "phase1_existing_group_strong_ready.csv"
+            phase1_blocked_path = report_dir / "phase1_existing_group_strong_blocked.csv"
             phase2_review_path = report_dir / "phase2_existing_group_review.csv"
             phase3_new_path = report_dir / "phase3_new_perfume_groups.csv"
             blocked_path = report_dir / "blocked_groups_for_later.csv"
@@ -786,6 +895,7 @@ class FlaconiGroupedMatchingService:
             _write_csv(matches_path, matches_rows)
             _write_csv(matches_summary_path, matches_summary_rows)
             _write_csv(phase1_ready_path, phase1_ready_rows)
+            _write_csv(phase1_blocked_path, phase1_blocked_rows)
             _write_csv(phase2_review_path, phase2_review_rows)
             _write_csv(phase3_new_path, phase3_new_rows)
             _write_csv(blocked_path, blocked_rows)
@@ -805,6 +915,7 @@ class FlaconiGroupedMatchingService:
                     "grouped_inventory_path": str(grouped_inventory_path),
                     "matches_path": str(matches_path),
                     "phase1_ready_path": str(phase1_ready_path),
+                    "phase1_blocked_path": str(phase1_blocked_path),
                     "phase2_review_path": str(phase2_review_path),
                     "phase3_new_path": str(phase3_new_path),
                     "blocked_path": str(blocked_path),
@@ -1026,11 +1137,11 @@ class FlaconiGroupedMatchingService:
             for key, value in sorted(counts.items())
         ]
 
-    def _phase1_ready_rows(
+    def _phase1_existing_rows(
         self,
         groups: list[GroupedOffer],
         offer_state: Mapping[str, CatalogOfferState],
-    ) -> list[dict[str, object]]:
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         rows: list[dict[str, object]] = []
         for group in groups:
             best = group.best_match
@@ -1064,6 +1175,12 @@ class FlaconiGroupedMatchingService:
                     "matched_perfume_id": best.perfume.id,
                     "matched_perfume_brand": best.perfume.brand,
                     "matched_perfume_name": best.perfume.name,
+                    "matched_perfume_concentration": best.perfume.concentration or "",
+                    "matched_perfume_concentration_hint": _target_concentration_hint(
+                        best.perfume
+                    )
+                    or "",
+                    "matched_perfume_volume_ml": _decimal_to_string(best.perfume.volume_ml),
                     "matched_perfume_has_any_offer": "true"
                     if state and state.has_any_offer
                     else "false",
@@ -1073,14 +1190,17 @@ class FlaconiGroupedMatchingService:
                     "matched_perfume_has_flaconi_offer": "true"
                     if state and state.has_flaconi_offer
                     else "false",
+                    "source_concentration": group.representative.concentration or "",
+                    "source_volume_ml": _decimal_to_string(group.representative.volume_ml),
                     "current_best_price": _price_to_string(current_best_price),
                     "price_relation": price_relation,
                     "match_score": f"{best.score:.3f}",
                     "match_reason": best.method,
                     "risk_flags": ",".join(group.risk_flags),
+                    "group_key": group.group_key,
                 }
             )
-        return rows
+        return _dedupe_existing_apply_candidates(rows)
 
     def _phase2_review_rows(
         self,
