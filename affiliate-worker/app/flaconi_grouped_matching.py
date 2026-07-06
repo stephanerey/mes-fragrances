@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from urllib.parse import unquote, urlparse
 
 from app.awin_feed_mapping import canonicalize_row
 from app.config import Settings
@@ -194,7 +195,16 @@ def _parse_volume_from_fields(row: Mapping[str, str]) -> Decimal | None:
         row.get("specifications"),
     ]
     text = " ".join(part for part in fields if part)
-    return parse_volume_ml(text)
+    volume = parse_volume_ml(text)
+    if volume is not None:
+        return volume
+    image_url = (row.get("image_url") or "").strip()
+    if not image_url:
+        return None
+    parsed = urlparse(image_url)
+    image_text = unquote(f"{parsed.path} {parsed.query}")
+    image_text = image_text.replace("-", " ").replace("_", " ").replace("/", " ")
+    return parse_volume_ml(image_text)
 
 
 def _parse_concentration_from_fields(row: Mapping[str, str]) -> str | None:

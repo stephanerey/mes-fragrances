@@ -16,6 +16,7 @@ from app.flaconi_grouped_matching import (
     _dedupe_existing_apply_candidates,
     _group_id,
     _group_key,
+    _parse_volume_from_fields,
     _price_to_string,
     _source_row_to_dict,
 )
@@ -148,6 +149,32 @@ def test_grouped_offer_serialization_keeps_bello_rabelo_price() -> None:
         external_id="111",
     )
     assert _source_row_to_dict(row)["price"] == "210.00"
+
+
+def test_parse_volume_from_image_url_when_source_text_has_no_volume() -> None:
+    row = {
+        "product_name": "Aigner Début Eau de parfum",
+        "description": "",
+        "merchant_category": "Eau de parfum",
+        "product_type": "Eau de parfum",
+        "keywords": "",
+        "specifications": "",
+        "image_url": "https://cdn.flaconi.net/media/catalog/product/a/i/aigner-debut-eau-de-parfum-100-ml-4013670509199_live.jpg?r=1WAWZF&c=fr",
+    }
+    assert _parse_volume_from_fields(row) == Decimal("100")
+
+
+def test_parse_volume_from_fields_prefers_source_text_over_image_url() -> None:
+    row = {
+        "product_name": "Memo Paris Marfa Eau de parfum 10 ml",
+        "description": "",
+        "merchant_category": "Eau de parfum",
+        "product_type": "Eau de parfum",
+        "keywords": "",
+        "specifications": "",
+        "image_url": "https://cdn.flaconi.net/media/catalog/product/m/e/memo-paris-marfa-eau-de-parfum-75-ml-1234567890123_live.jpg",
+    }
+    assert _parse_volume_from_fields(row) == Decimal("10")
 
 
 def test_same_name_different_volumes_stay_in_distinct_groups() -> None:
