@@ -31,7 +31,9 @@ mkdir -p "${REPORT_ROOT}"
   "$@"
 
 if [ -d "${HOST_REPORT_DIR}" ]; then
-  ln -sfn "${HOST_REPORT_DIR}" "${LATEST_LINK}"
+  if ! ln -sfn "${HOST_REPORT_DIR}" "${LATEST_LINK}"; then
+    printf 'warning: could not refresh latest link %s\n' "${LATEST_LINK}" >&2
+  fi
 fi
 
 printf 'host_report_dir=%s\n' "${HOST_REPORT_DIR}"
