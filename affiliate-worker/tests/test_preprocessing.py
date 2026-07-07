@@ -563,6 +563,48 @@ def test_detect_exclusion_reasons() -> None:
     assert reasons == {"set_or_bundle", "tester", "refill", "body_product"}
 
 
+@pytest.mark.parametrize(
+    ("product_name", "description"),
+    [
+        (
+            "Cacharel Rose Mallow All Over Perfume Mist Spray pour le corps 100 ml",
+            None,
+        ),
+        ("Generic Body Mist 150 ml", None),
+        ("Maison Perfume Mist 100 ml", None),
+        ("Brume parfumee corps 100 ml", None),
+        ("Hair Mist 75 ml", None),
+        ("Body Lotion 200 ml", None),
+        ("Shower Gel 200 ml", None),
+        ("Deodorant Spray 150 ml", None),
+        ("Refill 100 ml", None),
+        ("Gift Set Eau de parfum 50 ml", None),
+    ],
+)
+def test_detect_exclusion_reasons_blocks_non_comparable_body_products(
+    product_name: str,
+    description: str | None,
+) -> None:
+    reasons = detect_exclusion_reasons(product_name, description)
+
+    assert "body_product" in reasons or "refill" in reasons or "set_or_bundle" in reasons
+
+
+@pytest.mark.parametrize(
+    ("product_name", "description"),
+    [
+        ("Sauvage Eau de Parfum Spray 100 ml", None),
+        ("Terre d'Hermes Eau de Toilette Spray 50 ml", None),
+        ("Classic Parfum Spray 30 ml", None),
+    ],
+)
+def test_detect_exclusion_reasons_keeps_regular_perfume_spray(
+    product_name: str,
+    description: str | None,
+) -> None:
+    assert "body_product" not in detect_exclusion_reasons(product_name, description)
+
+
 def test_count_categories() -> None:
     counts = count_categories(ROWS)
 

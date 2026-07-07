@@ -398,6 +398,45 @@ def test_detect_exclusion_reasons_for_flaconi_hair_mist() -> None:
     assert "body_product" in reasons
 
 
+@pytest.mark.parametrize(
+    ("values", "expected_reason"),
+    [
+        (
+            ("Cacharel Rose Mallow All Over Perfume Mist Spray pour le corps 100 ml",),
+            "body_product",
+        ),
+        (("Maison Perfume Mist 100 ml",), "body_product"),
+        (("Generic Mist Spray pour le corps 100 ml",), "body_product"),
+        (("Body Spray 150 ml",), "body_product"),
+        (("Brume parfumee corps 100 ml",), "body_product"),
+        (("Lotion corps parfumee 200 ml",), "body_product"),
+        (("Refill 100 ml",), "refill"),
+        (("Luxury Gift Set Eau de parfum 50 ml",), "set_or_bundle"),
+    ],
+)
+def test_detect_exclusion_reasons_for_non_comparable_products(
+    values: tuple[str, ...],
+    expected_reason: str,
+) -> None:
+    reasons = detect_exclusion_reasons(*values)
+
+    assert expected_reason in reasons
+
+
+@pytest.mark.parametrize(
+    "product_name",
+    [
+        "Sauvage Eau de Parfum Spray 100 ml",
+        "Terre d'Hermes Eau de Toilette Spray 50 ml",
+        "Classic Parfum Spray 30 ml",
+    ],
+)
+def test_detect_exclusion_reasons_does_not_block_regular_perfume_spray(
+    product_name: str,
+) -> None:
+    assert "body_product" not in detect_exclusion_reasons(product_name)
+
+
 def test_brand_fallback_behavior() -> None:
     assert extract_brand_fallback("Dior - Sauvage Eau de Toilette 50 ml") == "Dior"
     assert extract_brand_fallback("Lancome La Vie Est Belle 50 ml") is None

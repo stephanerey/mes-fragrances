@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -241,6 +242,30 @@ def test_unknown_volume_multi_row_group_is_not_promoted_to_strong() -> None:
         offer_state={},
     )
     assert classification == "GROUP_BLOCKED_VOLUME_UNKNOWN"
+
+
+def test_group_with_all_over_perfume_mist_is_blocked_as_non_perfume() -> None:
+    row = make_row(
+        product_id="1",
+        brand="Cacharel",
+        name="Cacharel Rose Mallow All Over Perfume Mist Spray pour le corps 100 ml",
+        concentration="parfum",
+        volume_ml=Decimal("100"),
+        price="21.17",
+        external_id="3614274768916",
+    )
+    row = replace(
+        row,
+        merchant_category="Brume parfumee corps",
+        product_type="All Over Perfume Mist",
+        exclusion_reasons=["body_product"],
+    )
+    classification, _, _, _ = _classify_group(
+        [row],
+        candidates=[],
+        offer_state={},
+    )
+    assert classification == "GROUP_BLOCKED_NON_PERFUME"
 
 
 def test_brand_alias_can_recover_rabanne_existing_match() -> None:

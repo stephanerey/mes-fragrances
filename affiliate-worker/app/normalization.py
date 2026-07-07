@@ -51,13 +51,21 @@ FRAGRANCE_CATEGORY_EXCLUDED_PHRASES = {
     "hair perfume",
 }
 EXCLUSION_KEYWORDS = {
-    "set_or_bundle": ("coffret", "set", "duo", "trio"),
+    "set_or_bundle": ("coffret", "set", "duo", "trio", "gift set", "multipack"),
     "tester": ("tester", "testeur"),
     "refill": ("recharge", "refill"),
     "body_product": (
+        "all over perfume mist",
+        "perfume mist",
+        "mist spray",
+        "body spray",
+        "brume parfumee",
+        "brume corps",
+        "brume pour le corps",
         "gel douche",
         "shower gel",
         "lait corps",
+        "lotion corps",
         "body lotion",
         "body mist",
         "hair mist",
